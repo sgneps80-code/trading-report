@@ -3,8 +3,17 @@
 Trading Report Generator
 Genera ogni giorno un PDF con top 10 azioni, top 10 ETF tematici e analisi portafoglio,
 poi lo carica su Google Drive nella cartella "Trading Reports".
+
+VERSIONE 2 — Analisi più profonda e segnali STABILI:
+- Segnale operativo calcolato da un modello tecnico deterministico multi-periodo
+  (EMA20/50/200, RSI giornaliero e settimanale, performance 1M/3M/6M).
+- Memoria del segnale del giorno precedente (salvato su Drive) con ISTERESI:
+  un titolo non puo' passare da "Accumula" a "Riduci" in un solo giorno.
+- Claude non decide piu' il segnale: lo SPIEGA in modo coerente e giustifica
+  ogni cambiamento rispetto al giorno prima.
 """
 
+import io
 import os
 import json
 import logging
@@ -20,7 +29,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, HRFlowable
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
+from googleapiclient.http import MediaFileUpload, MediaIoBaseUpload
 import google.auth.transport.requests
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -29,6 +38,14 @@ logger = logging.getLogger(__name__)
 # ─── CONFIGURAZIONE ──────────────────────────────────────────────────────────
 
 GDRIVE_FOLDER_ID = "1F7FL8HNG3Epr_hPJm8IvSTCTND4IGlNz"
+STATE_FILENAME = "report-state.json"   # memoria dei segnali del giorno prima (su Drive)
+
+# Modello Claude per l'analisi testuale.
+# Per un'analisi ancora piu' approfondita puoi provare un modello Sonnet, es:
+#   CLAUDE_MODEL = "claude-sonnet-4-5"
+# (se il modello non e' disponibile sul tuo account, il report fallira'
+#  nello step di analisi: in quel caso rimetti la riga qui sotto.)
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 PORTFOLIO = [
     {"symbol": "OMER.MI",  "name": "OMER",                              "type": "Azione"},
@@ -113,19 +130,28 @@ def performance(prices: pd.Series, days: int) -> float | None:
 
 def get_ticker_data(symbol: str) -> dict | None:
     try:
-        hist = yf.Ticker(symbol).history(period="6mo")
+        # 1 anno di storico: serve per l'EMA200 (trend di lungo periodo)
+        hist = yf.Ticker(symbol).history(period="1y")
         if hist.empty or len(hist) < 60:
             return None
         close, volume = hist["Close"], hist["Volume"]
+
+        # Trend settimanale (riduce il rumore giornaliero)
+        weekly = close.resample("W").last().dropna()
+        rsi_w = calculate_rsi(weekly) if len(weekly) >= 15 else None
+
         return {
             "symbol": symbol,
             "price": float(close.iloc[-1]),
             "rsi": calculate_rsi(close),
+            "rsi_w": rsi_w,
             "ema20": calculate_ema(close, 20),
             "ema50": calculate_ema(close, 50),
+            "ema200": calculate_ema(close, 200),
             "vol_ratio": volume_ratio(volume),
             "perf_1m": performance(close, 21),
             "perf_3m": performance(close, 63),
+            "perf_6m": performance(close, 126),
         }
     except Exception as e:
         logger.warning(f"Skip {symbol}: {e}")
@@ -165,6 +191,82 @@ def screen_universe(universe: list, label: str) -> list:
     return results[:10]
 
 
+# ─── SEGNALE OPERATIVO STABILE (deterministico + isteresi) ───────────────────
+
+def technical_score(d: dict) -> float | None:
+    """
+    Punteggio tecnico multi-periodo. Piu' alto = piu' forte.
+    Combina trend di lungo (EMA200), medio (EMA50), breve (EMA20),
+    momentum (RSI giornaliero e settimanale) e performance 1M/3M/6M.
+    Essendo deterministico, a parita' di dati produce SEMPRE lo stesso valore.
+    """
+    price = d.get("price")
+    if not price:
+        return None
+
+    score = 0.0
+
+    # Trend (peso maggiore al lungo periodo → stabilita')
+    if d.get("ema200") is not None:
+        score += 2.0 if price > d["ema200"] else -2.0
+    if d.get("ema50") is not None:
+        score += 1.5 if price > d["ema50"] else -1.5
+    if d.get("ema20") is not None:
+        score += 1.0 if price > d["ema20"] else -1.0
+
+    # Momentum RSI giornaliero (con zona neutra per evitare il rumore)
+    rsi = d.get("rsi")
+    if rsi is not None:
+        if rsi >= 70:      score += 0.5     # forte ma occhio all'ipercomprato
+        elif rsi >= 55:    score += 1.5
+        elif rsi >= 45:    score += 0.0     # zona neutra
+        elif rsi >= 30:    score -= 1.5
+        else:              score -= 0.5     # ipervenduto: possibile rimbalzo
+
+    # RSI settimanale (conferma di medio periodo)
+    rsi_w = d.get("rsi_w")
+    if rsi_w is not None:
+        score += 1.0 if rsi_w >= 50 else -1.0
+
+    # Performance (con tetto per non farsi dominare da un singolo dato)
+    for key, weight in (("perf_1m", 0.05), ("perf_3m", 0.03), ("perf_6m", 0.02)):
+        v = d.get(key)
+        if v is not None:
+            score += max(min(v * weight, 2.0), -2.0)
+
+    return round(score, 2)
+
+
+def decide_signal(score: float | None, prev: str | None) -> str:
+    """
+    Traduce il punteggio in segnale operativo con ISTERESI e transizioni
+    a un solo gradino: Riduci ↔ Mantieni ↔ Accumula.
+    Impossibile passare da 'Accumula' a 'Riduci' (o viceversa) in un giorno.
+    """
+    if score is None:
+        return "Mantieni"
+
+    def base(s: float) -> str:
+        if s >= 3.0:  return "Accumula"
+        if s <= -2.0: return "Riduci"
+        return "Mantieni"
+
+    # Primo run oppure si parte da "Mantieni": usa le bande base
+    if prev is None or prev == "Mantieni":
+        return base(score)
+
+    # Da "Accumula": resta finche' non si indebolisce chiaramente, poi scende
+    # di UN solo gradino (a "Mantieni"), mai direttamente a "Riduci".
+    if prev == "Accumula":
+        return "Accumula" if score >= 1.0 else "Mantieni"
+
+    # Da "Riduci": resta finche' non recupera, poi sale di UN solo gradino.
+    if prev == "Riduci":
+        return "Riduci" if score <= -0.5 else "Mantieni"
+
+    return base(score)
+
+
 def get_portfolio_data() -> list:
     results = []
     for item in PORTFOLIO:
@@ -185,6 +287,17 @@ def get_portfolio_data() -> list:
     return results
 
 
+def apply_signals(portfolio: list, prev_state: dict) -> list:
+    """Calcola il segnale stabile per ogni posizione usando la memoria del giorno prima."""
+    for p in portfolio:
+        p["score"] = technical_score(p)
+        prev = (prev_state.get(p["symbol"]) or {}).get("signal")
+        p["prev_signal"] = prev
+        p["segnale"] = decide_signal(p["score"], prev)
+        p["changed"] = bool(prev is not None and prev != p["segnale"])
+    return portfolio
+
+
 def get_index_data() -> dict:
     indices = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "Eurostoxx 50": "^STOXX50E", "FTSE MIB": "FTSEMIB.MI"}
     out = {}
@@ -199,60 +312,88 @@ def get_index_data() -> dict:
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
 
+def _fmt2(v) -> str:
+    return f"{v:.2f}" if isinstance(v, (int, float)) else "n.d."
+
+
 def generate_analysis(stocks: list, etfs: list, portfolio: list, indices: dict) -> dict:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     today = datetime.now().strftime("%d/%m/%Y")
 
     def fmt(lst):
         return "\n".join(
-            f"- {d['symbol']}: prezzo {d['price']:.2f}, RSI {d['rsi']}, 1M {d.get('perf_1m','n.d.')}%, 3M {d.get('perf_3m','n.d.')}%, vol_ratio {d.get('vol_ratio','n.d.')}"
+            f"- {d['symbol']}: prezzo {d['price']:.2f}, RSI {d['rsi']}, RSI_sett {d.get('rsi_w','n.d.')}, "
+            f"1M {d.get('perf_1m','n.d.')}%, 3M {d.get('perf_3m','n.d.')}%, 6M {d.get('perf_6m','n.d.')}%, "
+            f"vol_ratio {d.get('vol_ratio','n.d.')}"
             for d in lst
         )
 
-    port_txt = "\n".join(
-        f"- {p['name']} ({p['symbol']}): prezzo {p.get('price','n.d.')}, RSI {p.get('rsi','n.d.')}, trend {p['trend']}, 1M {p.get('perf_1m','n.d.')}%"
-        for p in portfolio
-    )
+    port_lines = []
+    for p in portfolio:
+        change_note = ""
+        if p.get("changed") and p.get("prev_signal"):
+            change_note = (f"  >>> SEGNALE CAMBIATO da '{p['prev_signal']}' a '{p['segnale']}' "
+                           f"rispetto a ieri: spiega in modo esplicito cosa e' cambiato.")
+        port_lines.append(
+            f"- {p['name']} ({p['symbol']}) [{p.get('type','')}]: "
+            f"prezzo {_fmt2(p.get('price'))}, trend {p.get('trend','n.d.')}, "
+            f"RSI {p.get('rsi','n.d.')}, RSI_sett {p.get('rsi_w','n.d.')}, "
+            f"EMA20 {_fmt2(p.get('ema20'))}, EMA50 {_fmt2(p.get('ema50'))}, EMA200 {_fmt2(p.get('ema200'))}, "
+            f"1M {p.get('perf_1m','n.d.')}%, 3M {p.get('perf_3m','n.d.')}%, 6M {p.get('perf_6m','n.d.')}%, "
+            f"score {p.get('score','n.d.')}. "
+            f"SEGNALE GIA' CALCOLATO (NON modificarlo): {p.get('segnale')}.{change_note}"
+        )
+    port_txt = "\n".join(port_lines)
     idx_txt = "\n".join(f"- {k}: {v:+.2f}%" if v is not None else f"- {k}: n.d." for k, v in indices.items())
 
-    prompt = f"""Sei un analista finanziario esperto. Data: {today}.
+    prompt = f"""Sei un analista finanziario esperto e RIGOROSO. Data: {today}.
 
-INDICI:
+Il tuo compito e' scrivere motivazioni professionali e APPROFONDITE, NON inventare i segnali.
+Il segnale operativo di ogni posizione del portafoglio e' GIA' stato calcolato da un modello
+tecnico deterministico multi-periodo (EMA20/50/200 + RSI giornaliero e settimanale + performance
+1M/3M/6M) con isteresi. NON devi cambiarlo: devi spiegarlo in modo coerente.
+
+REGOLE FONDAMENTALI:
+1. La motivazione deve essere COERENTE con il segnale gia' calcolato (mai contraddirlo).
+2. Se un segnale e' CAMBIATO rispetto a ieri, spiega chiaramente quale condizione tecnica
+   e' cambiata (es. il prezzo ha perso l'EMA50, l'RSI settimanale e' sceso sotto 50, ecc.).
+3. Vai in profondita': cita trend di lungo periodo (EMA200), momentum multi-periodo, livelli.
+4. Se un titolo e' uno strumento a leva (nome con 'Lev', '2x' o '3x'), ricorda SEMPRE il
+   rischio di decay da leva giornaliera su orizzonti superiori a un giorno.
+
+INDICI (variazione giornaliera):
 {idx_txt}
 
-TOP AZIONI (filtro momentum applicato):
+TOP AZIONI (gia' filtrate per momentum):
 {fmt(stocks)}
 
-TOP ETF TEMATICI (filtro momentum applicato):
+TOP ETF TEMATICI (gia' filtrati per momentum):
 {fmt(etfs)}
 
-PORTAFOGLIO STEFANO:
+PORTAFOGLIO DI STEFANO (con segnale gia' calcolato):
 {port_txt}
 
 Genera un JSON con questa struttura ESATTA (solo JSON, niente markdown):
 {{
-  "contesto_mercato": "2-3 frasi sul sentiment e sugli indici",
+  "contesto_mercato": "3-4 frasi sul sentiment, sugli indici e sui settori piu' forti/deboli",
   "stocks_analysis": [
-    {{"symbol": "TICKER", "motivazione": "2-3 righe professionali", "rating": "Forte"}},
-    ...
+    {{"symbol": "TICKER", "motivazione": "2-3 righe professionali", "rating": "Forte"}}
   ],
   "etfs_analysis": [
-    {{"symbol": "TICKER", "tema": "AI / Semiconduttori / ecc.", "motivazione": "2-3 righe", "rating": "Moderato"}},
-    ...
+    {{"symbol": "TICKER", "tema": "AI / Semiconduttori / ecc.", "motivazione": "2-3 righe", "rating": "Moderato"}}
   ],
   "portfolio_analysis": [
-    {{"symbol": "TICKER", "segnale": "Accumula", "motivazione": "2-3 righe"}},
-    ...
+    {{"symbol": "TICKER", "motivazione": "3-4 righe: giustifica il segnale gia' calcolato, cita gli indicatori e, se cambiato, spiega perche'"}}
   ],
-  "sintesi_portafoglio": "2-3 frasi di sintesi operativa"
+  "sintesi_portafoglio": "3-4 frasi di sintesi operativa complessiva, coerente con i segnali"
 }}
 
-Rating: "Forte" o "Moderato". Segnale: "Accumula", "Mantieni" o "Riduci".
-Per LBRT.MI (ETC a leva 2x) menziona sempre il rischio decay da leva giornaliera."""
+Rating (solo per azioni/ETF): "Forte" o "Moderato".
+NON includere il campo "segnale" nel portfolio_analysis: il segnale e' gia' deciso."""
 
     msg = client.messages.create(
-        model="claude-haiku-4-5-20251001",
-        max_tokens=3000,
+        model=CLAUDE_MODEL,
+        max_tokens=3500,
         messages=[{"role": "user", "content": prompt}]
     )
     text = msg.content[0].text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
@@ -367,6 +508,11 @@ def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
     for p in portfolio:
         a = pm.get(p["symbol"], {})
         price = f"{p['price']:.2f}" if p.get("price") else "n.d."
+        # Cella segnale: se cambiato rispetto a ieri, mostra il segnale precedente
+        seg = p.get("segnale", "Mantieni")
+        seg_cell = [signal_para(seg, small_s)]
+        if p.get("changed") and p.get("prev_signal"):
+            seg_cell.append(Paragraph(f"<font size='6' color='#888888'>(ieri: {p['prev_signal']})</font>", small_s))
         rows.append([
             Paragraph(f"<b>{p['name']}</b><br/><font size='7'>{p['symbol']}</font>", small_s),
             p.get("type", ""),
@@ -374,7 +520,7 @@ def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
             str(p.get("rsi") or "n.d."),
             p.get("trend", "n.d."),
             pct(p.get("perf_1m")),
-            signal_para(a.get("segnale", "Mantieni"), small_s),
+            seg_cell,
             Paragraph(a.get("motivazione", ""), small_s),
         ])
     t = Table(rows, colWidths=[3.2*cm, 2.0*cm, 1.4*cm, 1.0*cm, 1.6*cm, 1.2*cm, 1.9*cm, 5.5*cm])
@@ -401,7 +547,7 @@ def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
 
 # ─── GOOGLE DRIVE ────────────────────────────────────────────────────────────
 
-def upload_to_drive(file_path: str, filename: str) -> str:
+def get_drive_service():
     creds = Credentials(
         token=None,
         refresh_token=os.environ["GDRIVE_REFRESH_TOKEN"],
@@ -411,7 +557,59 @@ def upload_to_drive(file_path: str, filename: str) -> str:
         scopes=["https://www.googleapis.com/auth/drive.file"],
     )
     creds.refresh(google.auth.transport.requests.Request())
-    service = build("drive", "v3", credentials=creds)
+    return build("drive", "v3", credentials=creds)
+
+
+def load_previous_signals(service) -> dict:
+    """Legge da Drive i segnali dell'ultimo run. Se non esiste, torna {} (primo run)."""
+    try:
+        res = service.files().list(
+            q=f"name='{STATE_FILENAME}' and '{GDRIVE_FOLDER_ID}' in parents and trashed=false",
+            spaces="drive", fields="files(id,name)", pageSize=1,
+        ).execute()
+        files = res.get("files", [])
+        if not files:
+            logger.info("Nessuno stato precedente su Drive (primo run o file assente).")
+            return {}
+        raw = service.files().get_media(fileId=files[0]["id"]).execute()
+        data = json.loads(raw.decode("utf-8") if isinstance(raw, bytes) else raw)
+        logger.info(f"Stato precedente caricato ({len(data)} posizioni).")
+        return data
+    except Exception as e:
+        logger.warning(f"Impossibile leggere lo stato precedente: {e}")
+        return {}
+
+
+def save_signals(service, portfolio: list) -> None:
+    """Salva su Drive i segnali di oggi, cosi' il prossimo run ha memoria."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    state = {
+        p["symbol"]: {"signal": p.get("segnale", "Mantieni"),
+                      "score": p.get("score"),
+                      "date": today}
+        for p in portfolio
+    }
+    try:
+        payload = json.dumps(state, indent=2, ensure_ascii=False).encode("utf-8")
+        media = MediaIoBaseUpload(io.BytesIO(payload), mimetype="application/json")
+        res = service.files().list(
+            q=f"name='{STATE_FILENAME}' and '{GDRIVE_FOLDER_ID}' in parents and trashed=false",
+            spaces="drive", fields="files(id)", pageSize=1,
+        ).execute()
+        files = res.get("files", [])
+        if files:
+            service.files().update(fileId=files[0]["id"], media_body=media).execute()
+        else:
+            service.files().create(
+                body={"name": STATE_FILENAME, "parents": [GDRIVE_FOLDER_ID]},
+                media_body=media,
+            ).execute()
+        logger.info("Stato segnali salvato su Drive.")
+    except Exception as e:
+        logger.warning(f"Impossibile salvare lo stato dei segnali: {e}")
+
+
+def upload_to_drive(service, file_path: str, filename: str) -> str:
     file = service.files().create(
         body={"name": filename, "parents": [GDRIVE_FOLDER_ID]},
         media_body=MediaFileUpload(file_path, mimetype="application/pdf"),
@@ -429,10 +627,15 @@ def main():
     output_path = f"/tmp/trading-report-{today}.pdf"
 
     logger.info("=== Trading Report Generator ===")
-    indices  = get_index_data()
-    stocks   = screen_universe(STOCK_UNIVERSE, "Stocks")
-    etfs     = screen_universe(ETF_UNIVERSE, "ETFs")
+    indices   = get_index_data()
+    stocks    = screen_universe(STOCK_UNIVERSE, "Stocks")
+    etfs      = screen_universe(ETF_UNIVERSE, "ETFs")
     portfolio = get_portfolio_data()
+
+    # Connessione a Drive + memoria del giorno prima → segnali stabili
+    service = get_drive_service()
+    prev_state = load_previous_signals(service)
+    portfolio = apply_signals(portfolio, prev_state)
 
     logger.info("Generating analysis with Claude...")
     analysis = generate_analysis(stocks, etfs, portfolio, indices)
@@ -441,7 +644,10 @@ def main():
     build_pdf(stocks, etfs, portfolio, indices, analysis, output_path)
 
     logger.info("Uploading to Google Drive...")
-    url = upload_to_drive(output_path, f"trading-report-{today}.pdf")
+    url = upload_to_drive(service, output_path, f"trading-report-{today}.pdf")
+
+    # Salva i segnali di oggi per il run di domani
+    save_signals(service, portfolio)
 
     print(f"\n✅ Report caricato su Google Drive!")
     print(f"🔗 {url}\n")
