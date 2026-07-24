@@ -15,6 +15,7 @@ VERSIONE 2 — Analisi più profonda e segnali STABILI:
 
 import io
 import os
+import re
 import json
 import logging
 from datetime import datetime
@@ -443,6 +444,49 @@ def _fmt2(v) -> str:
     return f"{v:.2f}" if isinstance(v, (int, float)) else "n.d."
 
 
+def _loads_lenient(text: str) -> dict:
+    """Parsa il JSON di Claude; se arriva troncato, lo ripara chiudendo
+    stringhe e parentesi rimaste aperte, cosi' il report non si blocca mai."""
+    text = text.strip()
+    # Rimuove eventuali fence markdown ```json ... ```
+    text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+    text = re.sub(r"\s*```$", "", text).strip()
+    # Isola dal primo { in poi
+    start = text.find("{")
+    if start > 0:
+        text = text[start:]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        logger.warning("JSON troncato: tentativo di riparazione automatica.")
+        stack, in_str, esc = [], False, False
+        for ch in text:
+            if esc:
+                esc = False
+                continue
+            if ch == "\\":
+                esc = True
+                continue
+            if ch == '"':
+                in_str = not in_str
+                continue
+            if in_str:
+                continue
+            if ch in "{[":
+                stack.append(ch)
+            elif ch == "}" and stack and stack[-1] == "{":
+                stack.pop()
+            elif ch == "]" and stack and stack[-1] == "[":
+                stack.pop()
+        repaired = text
+        if in_str:
+            repaired += '"'
+        repaired = repaired.rstrip().rstrip(",")
+        for ch in reversed(stack):
+            repaired += "}" if ch == "{" else "]"
+        return json.loads(repaired)
+
+
 def generate_analysis(stocks: list, etfs: list, portfolio: list, indices: dict) -> dict:
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     today = datetime.now().strftime("%d/%m/%Y")
@@ -527,11 +571,10 @@ NON includere il campo "segnale" nel portfolio_analysis: il segnale e' gia' deci
 
     msg = client.messages.create(
         model=CLAUDE_MODEL,
-        max_tokens=3500,
+        max_tokens=8000,
         messages=[{"role": "user", "content": prompt}]
     )
-    text = msg.content[0].text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    return json.loads(text)
+    return _loads_lenient(msg.content[0].text)
 
 
 # ─── PDF ─────────────────────────────────────────────────────────────────────
