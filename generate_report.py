@@ -23,7 +23,7 @@ import pandas as pd
 import yfinance as yf
 import anthropic
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer, HRFlowable
@@ -128,6 +128,125 @@ def performance(prices: pd.Series, days: int) -> float | None:
     return round(float((prices.iloc[-1] / prices.iloc[-days] - 1) * 100), 1)
 
 
+# ─── CANDELE GIAPPONESI (riconoscimento pattern) ─────────────────────────────
+#
+# Confronta le ultime candele OHLC con le figure classiche dell'analisi
+# candlestick e restituisce nome, direzione e significato. Le figure sono
+# controllate in ordine di forza: 3 candele → 2 candele → 1 candela.
+
+def _cndl(o, h, l, c):
+    """Metriche di una candela: corpo, range, ombra sup./inf., toro/orso."""
+    body = abs(c - o)
+    rng = (h - l) if (h - l) > 0 else 1e-9
+    upper = h - max(o, c)
+    lower = min(o, c) - l
+    return body, rng, upper, lower
+
+
+def _result(pattern, direction, meaning):
+    return {"pattern": pattern, "direction": direction, "meaning": meaning}
+
+
+def detect_candle_pattern(df) -> dict:
+    """df: DataFrame con colonne Open/High/Low/Close. Analizza le ultime candele."""
+    try:
+        if df is None or len(df) < 2:
+            return _result("Dati insuff.", "Neutro", "storico troppo breve")
+        rows = df.tail(3)
+        vals = [(float(r.Open), float(r.High), float(r.Low), float(r.Close))
+                for r in rows.itertuples(index=False)]
+
+        # Candela corrente e precedente
+        o, h, l, c = vals[-1]
+        o1, h1, l1, c1 = vals[-2]
+        body, rng, upper, lower = _cndl(o, h, l, c)
+        body1, rng1, upper1, lower1 = _cndl(o1, h1, l1, c1)
+        bull, bull1 = c > o, c1 > o1
+
+        # ─── 3 CANDELE ───────────────────────────────────────────────
+        if len(vals) >= 3:
+            o0, h0, l0, c0 = vals[-3]
+            bull0 = c0 > o0
+            body0 = abs(c0 - o0)
+            mid0 = (o0 + c0) / 2
+
+            # Stella del mattino (inversione rialzista)
+            if (not bull0 and body0 > 0.5 * (h0 - l0 + 1e-9)
+                    and body1 < body0 * 0.6 and bull and c > mid0):
+                return _result("Stella del mattino", "Rialzista",
+                               "inversione rialzista forte dopo un ribasso")
+            # Stella della sera (inversione ribassista)
+            if (bull0 and body0 > 0.5 * (h0 - l0 + 1e-9)
+                    and body1 < body0 * 0.6 and not bull and c < mid0):
+                return _result("Stella della sera", "Ribassista",
+                               "inversione ribassista forte dopo un rialzo")
+            # Tre soldati bianchi
+            if bull0 and bull1 and bull and c1 > c0 and c > c1:
+                return _result("Tre soldati bianchi", "Rialzista",
+                               "trend rialzista consolidato")
+            # Tre corvi neri
+            if (not bull0) and (not bull1) and (not bull) and c1 < c0 and c < c1:
+                return _result("Tre corvi neri", "Ribassista",
+                               "trend ribassista consolidato")
+
+        # ─── 2 CANDELE ───────────────────────────────────────────────
+        # Engulfing rialzista
+        if (not bull1) and bull and c >= o1 and o <= c1 and body > body1:
+            return _result("Engulfing rialzista", "Rialzista",
+                           "i compratori inglobano la candela precedente")
+        # Engulfing ribassista
+        if bull1 and (not bull) and o >= c1 and c <= o1 and body > body1:
+            return _result("Engulfing ribassista", "Ribassista",
+                           "i venditori inglobano la candela precedente")
+        # Piercing line
+        if (not bull1) and bull and o < c1 and c > (o1 + c1) / 2 and c < o1:
+            return _result("Piercing line", "Rialzista",
+                           "recupero deciso dei compratori")
+        # Dark cloud cover
+        if bull1 and (not bull) and o > c1 and c < (o1 + c1) / 2 and c > o1:
+            return _result("Dark cloud cover", "Ribassista",
+                           "rientro deciso dei venditori")
+        # Harami rialzista (debole)
+        if (not bull1) and bull and body1 > body * 1.5 and o >= c1 and c <= o1:
+            return _result("Harami rialzista", "Rialzista (debole)",
+                           "possibile stabilizzazione dopo il calo")
+        # Harami ribassista (debole)
+        if bull1 and (not bull) and body1 > body * 1.5 and o <= c1 and c >= o1:
+            return _result("Harami ribassista", "Ribassista (debole)",
+                           "possibile stallo dopo la salita")
+
+        # ─── 1 CANDELA ───────────────────────────────────────────────
+        # Doji (indecisione)
+        if body <= 0.1 * rng:
+            return _result("Doji", "Neutro", "indecisione, possibile svolta")
+        # Martello (rialzista)
+        if lower >= 2 * body and upper <= 0.35 * body and body > 0:
+            return _result("Martello", "Rialzista",
+                           "possibile inversione al rialzo dopo un ribasso")
+        # Stella cadente (ribassista)
+        if upper >= 2 * body and lower <= 0.35 * body and body > 0:
+            return _result("Stella cadente", "Ribassista",
+                           "possibile inversione al ribasso dopo un rialzo")
+        # Marubozu (corpo pieno = continuazione forte)
+        if body >= 0.85 * rng:
+            if bull:
+                return _result("Marubozu rialzista", "Rialzista",
+                               "forte pressione in acquisto")
+            return _result("Marubozu ribassista", "Ribassista",
+                           "forte pressione in vendita")
+        # Trottola (indecisione)
+        if body <= 0.35 * rng and upper > 0 and lower > 0:
+            return _result("Trottola", "Neutro", "indecisione tra tori e orsi")
+
+        # Nessuna figura rilevante → indica solo il colore della candela
+        if bull:
+            return _result("Candela neutra", "Rialzista (lieve)", "chiusura sopra apertura")
+        return _result("Candela neutra", "Ribassista (lieve)", "chiusura sotto apertura")
+    except Exception as e:
+        logger.warning(f"Pattern detect error: {e}")
+        return _result("n.d.", "Neutro", "")
+
+
 def get_ticker_data(symbol: str) -> dict | None:
     try:
         # 1 anno di storico: serve per l'EMA200 (trend di lungo periodo)
@@ -139,6 +258,12 @@ def get_ticker_data(symbol: str) -> dict | None:
         # Trend settimanale (riduce il rumore giornaliero)
         weekly = close.resample("W").last().dropna()
         rsi_w = calculate_rsi(weekly) if len(weekly) >= 15 else None
+
+        # OHLC per il riconoscimento delle candele (giornaliero e settimanale)
+        ohlc_daily = hist[["Open", "High", "Low", "Close"]]
+        ohlc_weekly = hist.resample("W").agg(
+            {"Open": "first", "High": "max", "Low": "min", "Close": "last"}
+        ).dropna()
 
         return {
             "symbol": symbol,
@@ -152,6 +277,8 @@ def get_ticker_data(symbol: str) -> dict | None:
             "perf_1m": performance(close, 21),
             "perf_3m": performance(close, 63),
             "perf_6m": performance(close, 126),
+            "cndl_daily": detect_candle_pattern(ohlc_daily),
+            "cndl_weekly": detect_candle_pattern(ohlc_weekly),
         }
     except Exception as e:
         logger.warning(f"Skip {symbol}: {e}")
@@ -334,6 +461,8 @@ def generate_analysis(stocks: list, etfs: list, portfolio: list, indices: dict) 
         if p.get("changed") and p.get("prev_signal"):
             change_note = (f"  >>> SEGNALE CAMBIATO da '{p['prev_signal']}' a '{p['segnale']}' "
                            f"rispetto a ieri: spiega in modo esplicito cosa e' cambiato.")
+        cd = p.get("cndl_daily") or {}
+        cw = p.get("cndl_weekly") or {}
         port_lines.append(
             f"- {p['name']} ({p['symbol']}) [{p.get('type','')}]: "
             f"prezzo {_fmt2(p.get('price'))}, trend {p.get('trend','n.d.')}, "
@@ -341,6 +470,8 @@ def generate_analysis(stocks: list, etfs: list, portfolio: list, indices: dict) 
             f"EMA20 {_fmt2(p.get('ema20'))}, EMA50 {_fmt2(p.get('ema50'))}, EMA200 {_fmt2(p.get('ema200'))}, "
             f"1M {p.get('perf_1m','n.d.')}%, 3M {p.get('perf_3m','n.d.')}%, 6M {p.get('perf_6m','n.d.')}%, "
             f"score {p.get('score','n.d.')}. "
+            f"Candela giornaliera: {cd.get('pattern','n.d.')} ({cd.get('direction','')}); "
+            f"Candela settimanale: {cw.get('pattern','n.d.')} ({cw.get('direction','')}). "
             f"SEGNALE GIA' CALCOLATO (NON modificarlo): {p.get('segnale')}.{change_note}"
         )
     port_txt = "\n".join(port_lines)
@@ -360,6 +491,9 @@ REGOLE FONDAMENTALI:
 3. Vai in profondita': cita trend di lungo periodo (EMA200), momentum multi-periodo, livelli.
 4. Se un titolo e' uno strumento a leva (nome con 'Lev', '2x' o '3x'), ricorda SEMPRE il
    rischio di decay da leva giornaliera su orizzonti superiori a un giorno.
+5. Integra la lettura delle CANDELE giapponesi (giornaliera e settimanale): se la candela
+   conferma il trend/segnale rafforza la tesi; se lo contraddice (es. candela ribassista su
+   trend rialzista), segnala il possibile avvertimento di breve periodo.
 
 INDICI (variazione giornaliera):
 {idx_txt}
@@ -431,14 +565,36 @@ def signal_para(segnale: str, style) -> Paragraph:
     return Paragraph(f'<font color="{c}">● {segnale}</font>', style)
 
 
+def _dir_color(direction: str) -> str:
+    if "Rial" in direction:
+        return GREEN
+    if "Rib" in direction:
+        return RED
+    return AMBER
+
+
+def candle_para(cndl: dict, style) -> Paragraph:
+    d = cndl or {}
+    name = d.get("pattern", "-")
+    direction = d.get("direction", "Neutro")
+    meaning = d.get("meaning", "")
+    col = _dir_color(direction)
+    return Paragraph(
+        f"<b>{name}</b><br/><font color='{col}'>{direction}</font>"
+        f"<br/><font size='6.5' color='#555555'>{meaning}</font>",
+        style,
+    )
+
+
 def pct(val) -> str:
     return f"{val:+.1f}%" if val is not None else "n.d."
 
 
 def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
-    doc = SimpleDocTemplate(path, pagesize=A4,
-                            rightMargin=2*cm, leftMargin=2*cm,
-                            topMargin=2*cm, bottomMargin=2*cm)
+    # Pagina ORIZZONTALE: serve spazio per le colonne delle candele
+    doc = SimpleDocTemplate(path, pagesize=landscape(A4),
+                            rightMargin=1.5*cm, leftMargin=1.5*cm,
+                            topMargin=1.5*cm, bottomMargin=1.5*cm)
     base = getSampleStyleSheet()
     title_s   = ParagraphStyle("T",  parent=base["Title"],   fontSize=18, textColor=BLUE, spaceAfter=4)
     sub_s     = ParagraphStyle("S",  parent=base["Normal"],  fontSize=10, textColor=colors.HexColor("#666666"), spaceAfter=20)
@@ -482,7 +638,7 @@ def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
                      pct(s.get("perf_1m")), pct(s.get("perf_3m")),
                      rating_para(a.get("rating", "Moderato"), small_s),
                      Paragraph(a.get("motivazione", ""), small_s)])
-    t = Table(rows, colWidths=[0.6*cm, 1.8*cm, 1.5*cm, 1.0*cm, 1.2*cm, 1.2*cm, 2.0*cm, 7.5*cm])
+    t = Table(rows, colWidths=[0.8*cm, 2.0*cm, 1.8*cm, 1.1*cm, 1.4*cm, 1.4*cm, 2.5*cm, 15.7*cm])
     t.setStyle(TableStyle(TABLE_STYLE))
     story.append(t)
 
@@ -497,14 +653,15 @@ def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
                      pct(s.get("perf_1m")), pct(s.get("perf_3m")),
                      rating_para(a.get("rating", "Moderato"), small_s),
                      Paragraph(a.get("motivazione", ""), small_s)])
-    t = Table(rows, colWidths=[0.5*cm, 1.5*cm, 2.2*cm, 1.3*cm, 0.9*cm, 1.1*cm, 1.1*cm, 1.9*cm, 6.3*cm])
+    t = Table(rows, colWidths=[0.7*cm, 1.8*cm, 2.8*cm, 1.6*cm, 1.0*cm, 1.3*cm, 1.3*cm, 2.4*cm, 13.8*cm])
     t.setStyle(TableStyle(TABLE_STYLE))
     story.append(t)
 
     # 4 – Portafoglio
     story.append(Paragraph("Portafoglio — Analisi Tecnica", h2_s))
     pm = {a["symbol"]: a for a in analysis.get("portfolio_analysis", [])}
-    rows = [["Titolo", "Tipo", "Prezzo", "RSI", "Trend", "1M", "Segnale", "Analisi"]]
+    rows = [["Titolo", "Tipo", "Prezzo", "RSI", "Trend", "Segnale",
+             "Candela Giorn.", "Candela Sett.", "Analisi"]]
     for p in portfolio:
         a = pm.get(p["symbol"], {})
         price = f"{p['price']:.2f}" if p.get("price") else "n.d."
@@ -519,11 +676,13 @@ def build_pdf(stocks, etfs, portfolio, indices, analysis, path):
             price,
             str(p.get("rsi") or "n.d."),
             p.get("trend", "n.d."),
-            pct(p.get("perf_1m")),
             seg_cell,
+            candle_para(p.get("cndl_daily"), small_s),
+            candle_para(p.get("cndl_weekly"), small_s),
             Paragraph(a.get("motivazione", ""), small_s),
         ])
-    t = Table(rows, colWidths=[3.2*cm, 2.0*cm, 1.4*cm, 1.0*cm, 1.6*cm, 1.2*cm, 1.9*cm, 5.5*cm])
+    t = Table(rows, colWidths=[3.0*cm, 1.6*cm, 1.3*cm, 0.9*cm, 1.5*cm, 2.0*cm,
+                               4.6*cm, 4.6*cm, 7.2*cm])
     t.setStyle(TableStyle(TABLE_STYLE))
     story += [t, Spacer(1, 0.3*cm),
               Paragraph(f"<b>Sintesi operativa:</b> {analysis.get('sintesi_portafoglio', '')}", body_s)]
