@@ -31,14 +31,13 @@ logger = logging.getLogger(__name__)
 GDRIVE_FOLDER_ID = "1F7FL8HNG3Epr_hPJm8IvSTCTND4IGlNz"
 
 PORTFOLIO = [
-    {"symbol": "OMER.MI",  "name": "OMER",                                    "type": "Azione"},
-    {"symbol": "LBRT.MI",  "name": "WisdomTree Brent Crude Oil 2x Lev.",      "type": "ETC (2x leva)"},
-    {"symbol": "GBSE.MI",  "name": "WisdomTree Physical Gold EUR Hedged",      "type": "ETC"},
-    {"symbol": "DFNS.MI",  "name": "VanEck Defense UCITS ETF",                "type": "ETF"},
-    {"symbol": "SMH.MI",   "name": "VanEck Semiconductor UCITS ETF",          "type": "ETF"},
-    {"symbol": "EXSA.MI",  "name": "iShares STOXX Europe 600 UCITS ETF",      "type": "ETF"},
-    {"symbol": "MC.PA",    "name": "LVMH",                                    "type": "Azione"},
-    {"symbol": "RKTO",     "name": "Rocket One Inc",                          "type": "Azione"},
+    {"symbol": "OMER.MI",  "name": "OMER",                              "type": "Azione"},
+    {"symbol": "PANW",     "name": "Palo Alto Networks",                "type": "Azione"},
+    {"symbol": "GBSE.MI",  "name": "WisdomTree Physical Gold EUR Hedged", "type": "ETC"},
+    {"symbol": "SMH.MI",   "name": "VanEck Semiconductor UCITS ETF",    "type": "ETF"},
+    {"symbol": "EXSA.MI",  "name": "iShares STOXX Europe 600 UCITS ETF", "type": "ETF"},
+    {"symbol": "MC.PA",    "name": "LVMH",                              "type": "Azione"},
+    {"symbol": "RKTO",     "name": "Rocket One Inc",                    "type": "Azione"},
 ]
 
 STOCK_UNIVERSE = [
