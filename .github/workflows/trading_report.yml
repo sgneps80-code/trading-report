@@ -4,7 +4,7 @@ on:
   schedule:
     # 10:30 ora italiana estiva (CEST = UTC+2) → 08:30 UTC
     # In inverno (CET = UTC+1) il report arriverà alle 09:30 italiana
-    - cron: '30 8 * * 1-5'
+    - cron: '30 6 * * 1-5'
   workflow_dispatch:  # permette l'esecuzione manuale dalla UI di GitHub
 
 jobs:
