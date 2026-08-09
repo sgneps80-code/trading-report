@@ -441,6 +441,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <p id="err" style="color:#dc2626;font-size:13px;margin-top:12px;display:none">Password errata</p>
   </div>
 </div>
+""" if password_hash else ""
+
+    lock_script = f"""
 <script>
   const HASH = "{password_hash}";
   async function sha256(msg) {{
@@ -459,14 +462,14 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     }}
   }}
   document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
-  document.addEventListener("DOMContentLoaded", async () => {{
+  (async () => {{
     const h = localStorage.getItem("tr_auth");
     const exp = localStorage.getItem("tr_exp");
     if (h && exp && Date.now() < +exp && h === HASH) {{
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
     }}
-  }});
+  }})();
 </script>
 """ if password_hash else ""
 
@@ -581,7 +584,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 
 </div>
 </div>
-</body>
+{lock_script}</body>
 </html>"""
     return html
 
