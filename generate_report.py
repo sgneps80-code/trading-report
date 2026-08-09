@@ -25,7 +25,7 @@ PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
 STOCK_UNIVERSE_IT = [
     "ENI.MI", "ENEL.MI", "ISP.MI", "UCG.MI", "STM.MI", "RACE.MI",
     "BAMI.MI", "MB.MI", "LDO.MI", "PRY.MI", "SRG.MI", "TIT.MI",
-    "A2A.MI", "CPR.MI", "PIRC.MI", "MONC.MI", "TOD.MI", "MEDIOBANCA.MI",
+    "A2A.MI", "CPR.MI", "PIRC.MI", "MONC.MI", "AMP.MI", "FCA.MI",
 ]
 
 STOCK_UNIVERSE_US = [
@@ -276,10 +276,11 @@ def portfolio_rows(portfolio, analysis_map):
     for p in portfolio:
         a = analysis_map.get(p["symbol"], {})
         trend_color = {"Rialzista": "#16a34a", "Ribassista": "#dc2626", "Laterale": "#d97706"}.get(p["trend"], "#999")
+        price_str = f"{p['price']:.2f}" if p.get("price") else "n.d."
         rows += f"""<tr>
             <td><strong>{p['name']}</strong><br><span style="color:#999;font-size:11px">{p['symbol']}</span></td>
             <td style="font-size:12px;color:#666">{p.get('type','')}</td>
-            <td>{p['price']:.2f if p.get('price') else 'n.d.'}</td>
+            <td>{price_str}</td>
             <td>{p.get('rsi') or 'n.d.'}</td>
             <td style="color:{trend_color};font-weight:600">{p['trend']}</td>
             <td>{pct(p.get('perf_1m'))}</td>
