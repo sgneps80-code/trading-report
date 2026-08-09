@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trading Report — 09 August 2026</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #1a1a2e; }
+  .header { background: linear-gradient(135deg, #1e3a5f, #2d5a8e); color: white; padding: 32px 40px; }
+  .header h1 { font-size: 28px; font-weight: 700; }
+  .header p { opacity: 0.75; margin-top: 6px; font-size: 14px; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+  .section { background: white; border-radius: 12px; padding: 28px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); }
+  .section h2 { font-size: 18px; color: #1e3a5f; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
+  .idx-grid { display: flex; gap: 16px; flex-wrap: wrap; }
+  .idx-card { background: #f0f4f8; border-radius: 8px; padding: 14px 20px; min-width: 140px; }
+  .idx-name { font-size: 12px; color: #666; margin-bottom: 4px; }
+  .idx-val { font-size: 18px; }
+  .contesto { background: #f0f4f8; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; line-height: 1.7; color: #333; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }
+  th { background: #1e3a5f; color: white; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; }
+  td { padding: 10px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  tr:nth-child(even) { background: #f8fafc; }
+  tr:hover { background: #eef2ff; }
+  .badge-count { display: inline-block; background: #e2e8f0; color: #555; font-size: 11px; padding: 2px 8px; border-radius: 12px; margin-left: 8px; }
+  .empty-note { color: #999; font-size: 13px; font-style: italic; margin-top: 8px; }
+  .sintesi { background: #fffbeb; border-left: 4px solid #d97706; padding: 14px 18px; border-radius: 0 8px 8px 0; margin-top: 16px; font-size: 14px; line-height: 1.6; }
+  .disclaimer { font-size: 11px; color: #999; line-height: 1.6; margin-top: 8px; }
+  .gen-time { font-size: 12px; color: #aaa; text-align: right; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+
+<div id="lock" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f8fafc">
+  <div style="background:white;border-radius:16px;padding:48px;box-shadow:0 4px 24px rgba(0,0,0,0.1);text-align:center;max-width:360px;width:100%">
+    <div style="font-size:40px;margin-bottom:16px">📊</div>
+    <h2 style="color:#1e3a5f;margin-bottom:8px;font-size:22px">Trading Report</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:28px">Accesso riservato</p>
+    <input id="pwd" type="password" placeholder="Password" autofocus
+      style="width:100%;padding:12px 16px;border:2px solid #e2e8f0;border-radius:8px;font-size:16px;outline:none;margin-bottom:12px">
+    <button onclick="unlock()"
+      style="width:100%;padding:12px;background:#1e3a5f;color:white;border:none;border-radius:8px;font-size:16px;cursor:pointer;font-weight:600">
+      Accedi
+    </button>
+    <p id="err" style="color:#dc2626;font-size:13px;margin-top:12px;display:none">Password errata</p>
+  </div>
+</div>
+<script>
+  const HASH = "ca51faf8db2ae0338a5246d610fab1b01e953811150be1dab288927da73c4440";
+  async function sha256(msg) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  }
+  async function unlock() {
+    const h = await sha256(document.getElementById("pwd").value);
+    if (h === HASH) {
+      document.getElementById("lock").style.display = "none";
+      document.getElementById("report").style.display = "block";
+      localStorage.setItem("tr_auth", h);
+      localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
+    } else {
+      document.getElementById("err").style.display = "block";
+    }
+  }
+  document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
+  (async () => {
+    const h = localStorage.getItem("tr_auth");
+    const exp = localStorage.getItem("tr_exp");
+    if (h && exp && Date.now() < +exp && h === HASH) {
+      document.getElementById("lock").style.display = "none";
+      document.getElementById("report").style.display = "block";
+    }
+  })();
+</script>
+
+<div id="report" style='display:none'>
+
+<div class="header">
+  <h1>📊 Trading Report</h1>
+  <p>09 August 2026 — Analisi Momentum Giornaliera</p>
+</div>
+
+<div class="container">
+
+  <!-- CONTESTO DI MERCATO -->
+  <div class="section">
+    <h2>Contesto di Mercato</h2>
+    <div class="idx-grid"><div class="idx-card"><div class="idx-name">S&P 500</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.62%</span></div></div><div class="idx-card"><div class="idx-name">NASDAQ</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+1.30%</span></div></div><div class="idx-card"><div class="idx-name">Eurostoxx 50</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.33%</span></div></div><div class="idx-card"><div class="idx-name">FTSE MIB</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.06%</span></div></div></div>
+    <div class="contesto">Mercati azionari statunitensi mostrano momentum positivo con NASDAQ in rialzo dell'1.30%, trainato da titoli tecnologici ad alta crescita. In Europa il sentiment rimane cauto con indici minori in progresso frazionario. L'ambiente rimane favorevole ai comparti difensivi e innovativi, con volatilità contenuta.</div>
+  </div>
+
+  <!-- TOP 10 AZIONI ITALIANE -->
+  <div class="section">
+    <h2>Top Azioni Italiane — Momentum <span class="badge-count">1 oggi</span></h2>
+    
+    <table>
+      <thead><tr>
+        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Rating</th><th>Motivazione</th>
+      </tr></thead>
+      <tbody><tr>
+            <td style="color:#999;font-size:12px">1</td>
+            <td><strong>ENEL.MI</strong></td>
+            <td>10.04</td>
+            <td>56.5</td>
+            <td><span style="color:#16a34a;font-weight:600">+2.3%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+6.0%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">Utility stabile con RSI 56.5 in territorio neutrale. Performance trimestrale positiva (6.0%) suggerisce solidità fondamentale e potenziale dividendario. Idonea per profili conservativi che cercano esposizione all'energia rinnovabile.</td>
+        </tr></tbody>
+    </table>
+  </div>
+
+  <!-- TOP 10 AZIONI USA -->
+  <div class="section">
+    <h2>Top Azioni USA — Momentum <span class="badge-count">5 oggi</span></h2>
+    
+    <table>
+      <thead><tr>
+        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Rating</th><th>Motivazione</th>
+      </tr></thead>
+      <tbody><tr>
+            <td style="color:#999;font-size:12px">1</td>
+            <td><strong>PLTR</strong></td>
+            <td>172.01</td>
+            <td>70.0</td>
+            <td><span style="color:#16a34a;font-weight:600">+35.7%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+24.8%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">RSI 70.0 segnala ipercomprato e consolidamento probabile dopo rally straordinario (+35.7% a 1M). Momentum eccezionale ma margini di ritiro tecnico significativi; attesa prudente prima di accumuli.</td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">2</td>
+            <td><strong>NET</strong></td>
+            <td>300.27</td>
+            <td>64.8</td>
+            <td><span style="color:#16a34a;font-weight:600">+11.9%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+53.1%</span></td>
+            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
+            <td style="font-size:13px;color:#444">Performance trimestrale eccellente (+53.1%) con RSI 64.8 ancora in espansione. Tema cybersecurity strutturalmente favorevole; consolidamento in range 295-305 offre entry point interessanti.</td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">3</td>
+            <td><strong>NOW</strong></td>
+            <td>124.88</td>
+            <td>67.1</td>
+            <td><span style="color:#16a34a;font-weight:600">+15.9%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+37.0%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">SaaS enterprise con momentum sostenuto (+37.0% trimestrale, RSI 67.1). Valutazione premium giustificata da crescita; entry consigliato su pull-back tecnico a 122-123.</td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">4</td>
+            <td><strong>XOM</strong></td>
+            <td>153.04</td>
+            <td>58.7</td>
+            <td><span style="color:#16a34a;font-weight:600">+10.2%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+6.6%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">5</td>
+            <td><strong>LLY</strong></td>
+            <td>1185.71</td>
+            <td>56.8</td>
+            <td><span style="color:#dc2626;font-weight:600">-0.2%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+25.2%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr></tbody>
+    </table>
+  </div>
+
+  <!-- TOP 10 ETF TEMATICI -->
+  <div class="section">
+    <h2>Top ETF Tematici — Momentum <span class="badge-count">8 oggi</span></h2>
+    
+    <table>
+      <thead><tr>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Rating</th><th>Motivazione</th>
+      </tr></thead>
+      <tbody><tr>
+            <td style="color:#999;font-size:12px">1</td>
+            <td><strong>THNQ</strong></td>
+            <td style="color:#6366f1;font-size:13px">AI / Intelligenza Artificiale</td>
+            <td>90.54</td>
+            <td>63.1</td>
+            <td><span style="color:#16a34a;font-weight:600">+1.4%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+14.5%</span></td>
+            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
+            <td style="font-size:13px;color:#444">ETF ponderato per AI companies con RSI 63.1 in momentum equilibrato. Diversificazione su tema megatrend con volatilità inferiore ai singoli titoli; performance trimestrale +14.5% coerente.</td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">2</td>
+            <td><strong>MOAT</strong></td>
+            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td>112.27</td>
+            <td>74.5</td>
+            <td><span style="color:#16a34a;font-weight:600">+5.7%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+10.6%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">3</td>
+            <td><strong>HACK</strong></td>
+            <td style="color:#6366f1;font-size:13px">Cybersecurity</td>
+            <td>115.42</td>
+            <td>60.7</td>
+            <td><span style="color:#16a34a;font-weight:600">+5.9%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+34.8%</span></td>
+            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
+            <td style="font-size:13px;color:#444">Specializzato su security con eccellente performance trimestrale (+34.8%) e RSI 60.7 non saturo. Tema defensivo strutturale in ambiente di crescenti minacce; diversificazione superiore a titoli singoli.</td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">4</td>
+            <td><strong>IBB</strong></td>
+            <td style="color:#6366f1;font-size:13px">Biotecnologie</td>
+            <td>197.71</td>
+            <td>68.9</td>
+            <td><span style="color:#16a34a;font-weight:600">+2.9%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+16.4%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">Biotech ETF con RSI 68.9 in espansione e performance trimestrale +16.4%. Settore ciclico ma supportato da fondamentali farmaceutici solidi; mantiene posizione su allocazioni growth.</td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">5</td>
+            <td><strong>XBI</strong></td>
+            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td>157.37</td>
+            <td>61.1</td>
+            <td><span style="color:#dc2626;font-weight:600">-1.0%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+16.9%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">6</td>
+            <td><strong>ARKQ</strong></td>
+            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td>127.85</td>
+            <td>64.4</td>
+            <td><span style="color:#16a34a;font-weight:600">+3.1%</span></td>
+            <td><span style="color:#dc2626;font-weight:600">-5.2%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">7</td>
+            <td><strong>ARKF</strong></td>
+            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td>42.98</td>
+            <td>58.0</td>
+            <td><span style="color:#16a34a;font-weight:600">+3.2%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+1.7%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">8</td>
+            <td><strong>ARKK</strong></td>
+            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td>79.43</td>
+            <td>58.8</td>
+            <td><span style="color:#dc2626;font-weight:600">-1.0%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+0.4%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444"></td>
+        </tr></tbody>
+    </table>
+  </div>
+
+  <!-- PORTAFOGLIO -->
+  <div class="section">
+    <h2>💼 Portafoglio — Analisi Tecnica</h2>
+    <table>
+      <thead><tr>
+        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>Segnale</th><th>Analisi</th>
+      </tr></thead>
+      <tbody><tr>
+            <td><strong>OMER</strong><br><span style="color:#999;font-size:11px">OMER.MI</span></td>
+            <td style="font-size:12px;color:#666">Azione</td>
+            <td>3.28</td>
+            <td>40.0</td>
+            <td style="color:#dc2626;font-weight:600">Ribassista</td>
+            <td><span style="color:#dc2626;font-weight:600">-2.4%</span></td>
+            <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
+            <td style="font-size:13px;color:#444">RSI 40.0 in territorio debole con trend ribassista confermato (-2.4% a 1M). Carenza di momentum e posizionamento deteriorato suggeriscono ridimensionamento con ordini sell-stop a protezione.</td>
+        </tr><tr>
+            <td><strong>WisdomTree Brent Crude Oil 2x Lev.</strong><br><span style="color:#999;font-size:11px">LBRT.MI</span></td>
+            <td style="font-size:12px;color:#666">ETC (2x leva)</td>
+            <td>74.66</td>
+            <td>44.8</td>
+            <td style="color:#dc2626;font-weight:600">Ribassista</td>
+            <td><span style="color:#16a34a;font-weight:600">+14.0%</span></td>
+            <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
+            <td style="font-size:13px;color:#444">ETF a leva 2x su Brent con rischio decay significativo da reset giornaliero in mercati volatili. RSI 44.8 in esaurimento malgrado +14.0% mensile; la leva amplia perdite in scenario di ritracciamento.</td>
+        </tr><tr>
+            <td><strong>WisdomTree Physical Gold EUR Hedged</strong><br><span style="color:#999;font-size:11px">GBSE.MI</span></td>
+            <td style="font-size:12px;color:#666">ETC</td>
+            <td>22.75</td>
+            <td>70.3</td>
+            <td style="color:#16a34a;font-weight:600">Rialzista</td>
+            <td><span style="color:#16a34a;font-weight:600">+6.0%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
+            <td style="font-size:13px;color:#444">Gold hedged con RSI 70.3 e trend rialzista confermato. Posizione difensiva appropriata; eventuale take-profit su spikes sopra 23.50 per contenere overweight in preziosi.</td>
+        </tr><tr>
+            <td><strong>VanEck Defense UCITS ETF</strong><br><span style="color:#999;font-size:11px">DFNS.MI</span></td>
+            <td style="font-size:12px;color:#666">ETF</td>
+            <td>57.17</td>
+            <td>79.3</td>
+            <td style="color:#16a34a;font-weight:600">Rialzista</td>
+            <td><span style="color:#16a34a;font-weight:600">+11.9%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
+            <td style="font-size:13px;color:#444">Defense ETF con RSI 79.3 in ipercomprato ma trend rialzista robusto (+11.9% a 1M). Settore defensivo appropriato in portafoglio; attendere pull-back sotto 56.5 per incrementi senza forzare.</td>
+        </tr><tr>
+            <td><strong>VanEck Semiconductor UCITS ETF</strong><br><span style="color:#999;font-size:11px">SMH.MI</span></td>
+            <td style="font-size:12px;color:#666">ETF</td>
+            <td>93.95</td>
+            <td>51.1</td>
+            <td style="color:#16a34a;font-weight:600">Rialzista</td>
+            <td><span style="color:#dc2626;font-weight:600">-6.4%</span></td>
+            <td><span style="color:#16a34a;font-weight:700">● Accumula</span></td>
+            <td style="font-size:13px;color:#444">Semiconduttori con RSI 51.1 neutrale ma drawdown di -6.4% mensile crea opportunità su mega-trend. Posizione consolidata; accumuli su supporti 92-93 allineati a ciclo innovazione hardware.</td>
+        </tr><tr>
+            <td><strong>iShares STOXX Europe 600 UCITS ETF</strong><br><span style="color:#999;font-size:11px">EXSA.MI</span></td>
+            <td style="font-size:12px;color:#666">ETF</td>
+            <td>65.96</td>
+            <td>75.2</td>
+            <td style="color:#16a34a;font-weight:600">Rialzista</td>
+            <td><span style="color:#16a34a;font-weight:600">+3.1%</span></td>
+            <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
+            <td style="font-size:13px;color:#444">Broad Europe exposure con RSI 75.2 saturo (+3.1% a 1M). Allocazione idonea ma senza margine di rialzo immediato; hold su bilanciamento EU core.</td>
+        </tr><tr>
+            <td><strong>LVMH</strong><br><span style="color:#999;font-size:11px">MC.PA</span></td>
+            <td style="font-size:12px;color:#666">Azione</td>
+            <td>480.00</td>
+            <td>41.6</td>
+            <td style="color:#dc2626;font-weight:600">Ribassista</td>
+            <td><span style="color:#dc2626;font-weight:600">-2.6%</span></td>
+            <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
+            <td style="font-size:13px;color:#444">LVMH in weakness con RSI 41.6 e trend ribassista (-2.6% a 1M). Lusso soffre perdita momentum; positioning overweight in quality brands suggerisce allocation a growth più promettenti.</td>
+        </tr><tr>
+            <td><strong>Rocket One Inc</strong><br><span style="color:#999;font-size:11px">RKTO</span></td>
+            <td style="font-size:12px;color:#666">Azione</td>
+            <td>0.76</td>
+            <td>37.0</td>
+            <td style="color:#dc2626;font-weight:600">Ribassista</td>
+            <td><span style="color:#dc2626;font-weight:600">-15.4%</span></td>
+            <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
+            <td style="font-size:13px;color:#444">Microcap con drawdown brutale -15.4% mensile, RSI 37.0 critico e trend ribassista accentuato. Rischio di ulteriore compressione; exit consigliato per riallocazione a asset con liquidità e fondamentali solidi.</td>
+        </tr></tbody>
+    </table>
+    <div class="sintesi"><strong>Sintesi operativa:</strong> Portafoglio con concentrazione eccessiva su posizioni deteriorate (OMER, RKTO, LVMH) e sovraesposizione a strumenti ad elevato rischio (LBRT con decay leverato). Nuclei difensivi (GBSE, DFNS) e growth (SMH) ben costruiti richiedono ribalancing: elimina deteriorati, riduci LBRT, accumula SMH su pull-back, mantieni core EU con EXSA.</div>
+  </div>
+
+  <!-- FOOTER -->
+  <div class="section">
+    <p class="disclaimer">
+      Questo report è generato automaticamente a scopo informativo e non costituisce consulenza finanziaria.
+      Le decisioni di investimento sono responsabilità esclusiva dell'investitore.
+      I dati tecnici sono calcolati su prezzi storici di chiusura e potrebbero non riflettere le quotazioni in tempo reale.
+    </p>
+    <p class="gen-time">Generato il 09/08/2026 17:52 UTC</p>
+  </div>
+
+</div>
+</div>
+</body>
+</html>
