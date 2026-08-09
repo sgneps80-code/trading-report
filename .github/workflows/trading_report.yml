@@ -30,17 +30,8 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PORTFOLIO_JSON: ${{ secrets.PORTFOLIO_JSON }}
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
         run: python generate_report.py
-
-      - name: Encrypt with Staticrypt
-        run: |
-          npm install -g @hscrypto/staticrypt
-          staticrypt docs/index.html \
-            --password "${{ secrets.SITE_PASSWORD }}" \
-            --output docs/index.html \
-            --remember 7 \
-            --template-title "Trading Report" \
-            --no-export
 
       - name: Commit and push report
         run: |
