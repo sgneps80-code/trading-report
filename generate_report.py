@@ -459,14 +459,14 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     }}
   }}
   document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
-  (async () => {{
+  document.addEventListener("DOMContentLoaded", async () => {{
     const h = localStorage.getItem("tr_auth");
     const exp = localStorage.getItem("tr_exp");
     if (h && exp && Date.now() < +exp && h === HASH) {{
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
     }}
-  }})();
+  }});
 </script>
 """ if password_hash else ""
 
