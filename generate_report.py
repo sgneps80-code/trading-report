@@ -427,8 +427,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     TABLE_STYLE = """style="width:100%;border-collapse:collapse;font-size:14px;margin-top:12px" """
 
     lock_screen = f"""
-<div id="lock" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f8fafc">
-  <div style="background:white;border-radius:16px;padding:48px;box-shadow:0 4px 24px rgba(0,0,0,0.1);text-align:center;max-width:360px;width:100%">
+<div id="lock" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:linear-gradient(135deg,#1e3a5f,#2d5a8e)">
+  <div style="background:white;border-radius:16px;padding:48px;box-shadow:0 8px 40px rgba(0,0,0,0.4);text-align:center;max-width:360px;width:90%">
     <div style="font-size:40px;margin-bottom:16px">📊</div>
     <h2 style="color:#1e3a5f;margin-bottom:8px;font-size:22px">Trading Report</h2>
     <p style="color:#666;font-size:14px;margin-bottom:28px">Accesso riservato</p>
