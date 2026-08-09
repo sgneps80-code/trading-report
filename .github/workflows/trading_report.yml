@@ -39,4 +39,5 @@ jobs:
           git config user.email "bot@trading-report"
           git add docs/index.html
           git diff --staged --quiet || git commit -m "report: $(date +'%Y-%m-%d')"
+          git pull --rebase origin main
           git push
