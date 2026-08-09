@@ -76,7 +76,7 @@ def perf(prices, days):
         return None
     return round(float((prices.iloc[-1] / prices.iloc[-days] - 1) * 100), 1)
 
-def get_data(symbol):
+def get_data(symbol, private=False):
     try:
         hist = yf.Ticker(symbol).history(period="6mo")
         if hist.empty or len(hist) < 60:
@@ -93,7 +93,9 @@ def get_data(symbol):
             "perf_3m": perf(c, 63),
         }
     except Exception as e:
-        logger.warning(f"Skip {symbol}: {e}")
+        # Non loggare il simbolo se è un titolo del portafoglio (privato)
+        label = "[portfolio item]" if private else symbol
+        logger.warning(f"Skip {label}: {type(e).__name__}")
         return None
 
 def passes(d, min_price=1.0):
@@ -129,7 +131,7 @@ def screen(universe, label, min_price=1.0):
 def get_portfolio():
     out = []
     for item in PORTFOLIO:
-        d = get_data(item["symbol"]) or {}
+        d = get_data(item["symbol"], private=True) or {}
         d.update({"name": item["name"], "type": item["type"], "symbol": item["symbol"]})
         if d.get("price") and d.get("ema20") and d.get("ema50"):
             if d["price"] > d["ema20"] and d["price"] > d["ema50"]:
