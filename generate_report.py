@@ -16,6 +16,10 @@ import anthropic
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Silenzia i log interni di yfinance (es. "possibly delisted", "no price data")
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+logging.getLogger("peewee").setLevel(logging.CRITICAL)
+
 # ─── CONFIGURAZIONE ───────────────────────────────────────────────────────────
 
 # Il portafoglio è caricato da un GitHub Secret (PORTFOLIO_JSON) — non è nel codice.
@@ -24,9 +28,37 @@ logger = logging.getLogger(__name__)
 PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
 
 STOCK_UNIVERSE_IT = [
-    "ENI.MI", "ENEL.MI", "ISP.MI", "UCG.MI", "STM.MI", "RACE.MI",
-    "BAMI.MI", "MB.MI", "LDO.MI", "PRY.MI", "SRG.MI", "TIT.MI",
-    "A2A.MI", "CPR.MI", "PIRC.MI", "MONC.MI", "AMP.MI", "FCA.MI",
+    # FTSE MIB — simboli Yahoo Finance verificati (formato TICKER.MI)
+    "ENI.MI",    # Eni
+    "ENEL.MI",   # Enel
+    "ISP.MI",    # Intesa Sanpaolo
+    "UCG.MI",    # UniCredit
+    "G.MI",      # Generali
+    "STM.MI",    # STMicroelectronics
+    "RACE.MI",   # Ferrari
+    "STLAM.MI",  # Stellantis
+    "MB.MI",     # Mediobanca
+    "BAMI.MI",   # Banco BPM
+    "LDO.MI",    # Leonardo
+    "PRY.MI",    # Prysmian
+    "MONC.MI",   # Moncler
+    "NEXI.MI",   # Nexi
+    "AMP.MI",    # Amplifon
+    "FBK.MI",    # FinecoBank
+    "TRN.MI",    # Terna
+    "SRG.MI",    # Snam
+    "A2A.MI",    # A2A
+    "INW.MI",    # Inwit
+    "CPR.MI",    # Campari
+    "PIRC.MI",   # Pirelli
+    "REC.MI",    # Recordati
+    "EXO.MI",    # Exor
+    "SPM.MI",    # Saipem
+    "ERG.MI",    # ERG
+    "DIA.MI",    # DiaSorin
+    "BMPS.MI",   # Banca Monte dei Paschi
+    "TIT.MI",    # Telecom Italia
+    "AZM.MI",    # Azimut
 ]
 
 STOCK_UNIVERSE_US = [
@@ -51,20 +83,20 @@ ETF_UNIVERSE = [
 
 # ─── ANALISI TECNICA ─────────────────────────────────────────────────────────
 
-def calculate_rsi(prices: pd.Series, period: int = 14):
-    if len(prices) < period + 1:
-        return None
+def calculate_rsi_series(prices: pd.Series, period: int = 14) -> pd.Series:
     delta = prices.diff().dropna()
     gain = delta.where(delta > 0, 0.0)
     loss = -delta.where(delta < 0, 0.0)
     rs = gain.rolling(period).mean() / loss.rolling(period).mean().replace(0, float("inf"))
-    rsi = 100 - (100 / (1 + rs))
-    return round(float(rsi.iloc[-1]), 1)
+    return 100 - (100 / (1 + rs))
 
 def ema(prices, period):
     if len(prices) < period:
         return None
     return float(prices.ewm(span=period, adjust=False).mean().iloc[-1])
+
+def ema_series(prices, period):
+    return prices.ewm(span=period, adjust=False).mean()
 
 def vol_ratio(volume, period=20):
     if len(volume) < period:
@@ -77,39 +109,112 @@ def perf(prices, days):
         return None
     return round(float((prices.iloc[-1] / prices.iloc[-days] - 1) * 100), 1)
 
+def detect_candle(o, h, l, c):
+    """Rileva il pattern candela giapponese sull'ultima barra."""
+    try:
+        lo, lh, ll, lc = float(o.iloc[-1]), float(h.iloc[-1]), float(l.iloc[-1]), float(c.iloc[-1])
+        rng = lh - ll
+        if rng < 1e-9:
+            return "—"
+        body = abs(lc - lo)
+        upper = lh - max(lc, lo)
+        lower = min(lc, lo) - ll
+        body_r = body / rng
+
+        if body_r < 0.1:
+            return "Doji"
+        if lower > 2 * body and upper < body * 0.5 and lc > lo:
+            return "Hammer ▲"
+        if lower > 2 * body and upper < body * 0.5 and lc < lo:
+            return "Hanging Man ▼"
+        if upper > 2 * body and lower < body * 0.5 and lc < lo:
+            return "Shooting Star ▼"
+        if upper > 2 * body and lower < body * 0.5 and lc > lo:
+            return "Inv. Hammer ▲"
+        # Engulfing (confronta con candela precedente)
+        po, pc = float(o.iloc[-2]), float(c.iloc[-2])
+        if lc > lo and lc > pc and lo < po:
+            return "Bullish Engulfing ▲"
+        if lc < lo and lc < pc and lo > po:
+            return "Bearish Engulfing ▼"
+        if lc > lo and body_r > 0.6:
+            return "Bullish"
+        if lc < lo and body_r > 0.6:
+            return "Bearish"
+        return "Neutro"
+    except:
+        return "—"
+
 def get_data(symbol, private=False):
     try:
         hist = yf.Ticker(symbol).history(period="6mo")
         if hist.empty or len(hist) < 60:
             return None
-        c, v = hist["Close"], hist["Volume"]
+        o, h, l, c, v = hist["Open"], hist["High"], hist["Low"], hist["Close"], hist["Volume"]
+
+        # RSI serie completa
+        rsi_series = calculate_rsi_series(c)
+        rsi_now = round(float(rsi_series.iloc[-1]), 1)
+        rsi_last5 = [round(float(x), 1) for x in rsi_series.iloc[-5:] if not pd.isna(x)]
+
+        # EMA serie per stabilità
+        ema20_s = ema_series(c, 20)
+        ema50_s = ema_series(c, 50)
+
+        # Candela giornaliera
+        candle_d = detect_candle(o, h, l, c)
+
+        # Candela settimanale (resample)
+        weekly = hist.resample("W").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
+        candle_w = detect_candle(weekly["Open"], weekly["High"], weekly["Low"], weekly["Close"]) if len(weekly) >= 2 else "—"
+
         return {
             "symbol": symbol,
             "price": round(float(c.iloc[-1]), 2),
-            "rsi": calculate_rsi(c),
-            "ema20": ema(c, 20),
-            "ema50": ema(c, 50),
+            "rsi": rsi_now,
+            "rsi_last5": rsi_last5,
+            "ema20": float(ema20_s.iloc[-1]),
+            "ema20_last3": list(ema20_s.iloc[-3:].values),
+            "ema50": float(ema50_s.iloc[-1]),
+            "ema50_last3": list(ema50_s.iloc[-3:].values),
+            "close_last3": list(c.iloc[-3:].values),
             "vol_ratio": vol_ratio(v),
             "perf_1m": perf(c, 21),
             "perf_3m": perf(c, 63),
+            "candle_d": candle_d,
+            "candle_w": candle_w,
         }
     except Exception as e:
-        # Non loggare il simbolo se è un titolo del portafoglio (privato)
         label = "[portfolio item]" if private else symbol
         logger.warning(f"Skip {label}: {type(e).__name__}")
         return None
 
 def passes(d, min_price=1.0):
+    """Filtro stabile: il titolo deve rispettare i criteri per almeno 3 giorni consecutivi."""
     if not d or d["price"] < min_price:
         return False
-    if d["rsi"] is None or not (50 <= d["rsi"] <= 75):
+
+    # RSI: deve essere in [50,75] negli ultimi 3 giorni (stabilità segnale)
+    rsi5 = d.get("rsi_last5", [])
+    if len(rsi5) < 3 or sum(1 for r in rsi5[-3:] if 50 <= r <= 75) < 3:
         return False
-    if d["ema20"] is None or d["price"] < d["ema20"]:
+
+    # Prezzo > EMA20 negli ultimi 3 giorni
+    closes = d.get("close_last3", [])
+    ema20s = d.get("ema20_last3", [])
+    if len(closes) < 3 or len(ema20s) < 3:
         return False
-    if d["ema50"] is None or d["price"] < d["ema50"]:
+    if not all(c > e for c, e in zip(closes, ema20s)):
         return False
+
+    # Prezzo > EMA50 oggi
+    if d["price"] < d["ema50"]:
+        return False
+
+    # Volume in crescita
     if d["vol_ratio"] is None or d["vol_ratio"] < 1.0:
         return False
+
     return True
 
 def score(d):
@@ -235,9 +340,19 @@ def idx_badge(val):
     sign = "+" if val >= 0 else ""
     return f'<span style="color:{color};font-weight:700">{sign}{val:.2f}%</span>'
 
+def candle_badge(pattern):
+    """Colore badge candela in base al tipo."""
+    if not pattern or pattern == "—":
+        return '<span style="color:#999">—</span>'
+    if any(x in pattern for x in ["Bullish", "Hammer ▲", "Inv. Hammer ▲", "Engulfing ▲"]):
+        return f'<span style="color:#16a34a;font-size:12px">{pattern}</span>'
+    if any(x in pattern for x in ["Bearish", "Shooting Star", "Hanging Man", "Engulfing ▼"]):
+        return f'<span style="color:#dc2626;font-size:12px">{pattern}</span>'
+    return f'<span style="color:#888;font-size:12px">{pattern}</span>'
+
 def stock_rows(lst, analysis_map):
     if not lst:
-        return '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (segnale stabile richiesto per 3 giorni consecutivi)</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -248,6 +363,8 @@ def stock_rows(lst, analysis_map):
             <td>{d['rsi'] or 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
             <td>{pct(d.get('perf_3m'))}</td>
+            <td>{candle_badge(d.get('candle_d','—'))}</td>
+            <td>{candle_badge(d.get('candle_w','—'))}</td>
             <td>{rating_badge(a.get('rating','Moderato'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -255,7 +372,7 @@ def stock_rows(lst, analysis_map):
 
 def etf_rows(lst, analysis_map):
     if not lst:
-        return '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px">Nessun ETF ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="11" style="text-align:center;color:#999;padding:20px">Nessun ETF ha superato il filtro oggi</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -267,6 +384,8 @@ def etf_rows(lst, analysis_map):
             <td>{d['rsi'] or 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
             <td>{pct(d.get('perf_3m'))}</td>
+            <td>{candle_badge(d.get('candle_d','—'))}</td>
+            <td>{candle_badge(d.get('candle_w','—'))}</td>
             <td>{rating_badge(a.get('rating','Moderato'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -408,7 +527,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>Rating</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_it, sm_it)}</tbody>
     </table>
@@ -420,7 +539,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>Rating</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_us, sm_us)}</tbody>
     </table>
@@ -432,7 +551,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if etfs else '<p class="empty-note">Nessun ETF ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>Rating</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em)}</tbody>
     </table>
