@@ -6,6 +6,7 @@ Genera un report HTML giornaliero, lo cifra con Staticrypt e lo committa in docs
 
 import os
 import json
+import hashlib
 import logging
 from datetime import datetime
 import pandas as pd
@@ -289,7 +290,7 @@ def portfolio_rows(portfolio, analysis_map):
         </tr>"""
     return rows
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis):
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash=""):
     today = datetime.now().strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
@@ -305,6 +306,50 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis):
 
     TABLE_HEAD = """<thead><tr style="background:#1e3a5f;color:white">"""
     TABLE_STYLE = """style="width:100%;border-collapse:collapse;font-size:14px;margin-top:12px" """
+
+    lock_screen = f"""
+<div id="lock" style="display:flex;align-items:center;justify-content:center;min-height:100vh;background:#f8fafc">
+  <div style="background:white;border-radius:16px;padding:48px;box-shadow:0 4px 24px rgba(0,0,0,0.1);text-align:center;max-width:360px;width:100%">
+    <div style="font-size:40px;margin-bottom:16px">📊</div>
+    <h2 style="color:#1e3a5f;margin-bottom:8px;font-size:22px">Trading Report</h2>
+    <p style="color:#666;font-size:14px;margin-bottom:28px">Accesso riservato</p>
+    <input id="pwd" type="password" placeholder="Password" autofocus
+      style="width:100%;padding:12px 16px;border:2px solid #e2e8f0;border-radius:8px;font-size:16px;outline:none;margin-bottom:12px">
+    <button onclick="unlock()"
+      style="width:100%;padding:12px;background:#1e3a5f;color:white;border:none;border-radius:8px;font-size:16px;cursor:pointer;font-weight:600">
+      Accedi
+    </button>
+    <p id="err" style="color:#dc2626;font-size:13px;margin-top:12px;display:none">Password errata</p>
+  </div>
+</div>
+<script>
+  const HASH = "{password_hash}";
+  async function sha256(msg) {{
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  }}
+  async function unlock() {{
+    const h = await sha256(document.getElementById("pwd").value);
+    if (h === HASH) {{
+      document.getElementById("lock").style.display = "none";
+      document.getElementById("report").style.display = "block";
+      localStorage.setItem("tr_auth", h);
+      localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
+    }} else {{
+      document.getElementById("err").style.display = "block";
+    }}
+  }}
+  document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
+  (async () => {{
+    const h = localStorage.getItem("tr_auth");
+    const exp = localStorage.getItem("tr_exp");
+    if (h && exp && Date.now() < +exp && h === HASH) {{
+      document.getElementById("lock").style.display = "none";
+      document.getElementById("report").style.display = "block";
+    }}
+  }})();
+</script>
+""" if password_hash else ""
 
     html = f"""<!DOCTYPE html>
 <html lang="it">
@@ -339,6 +384,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis):
 </style>
 </head>
 <body>
+
+{lock_screen}
+<div id="report" {"style='display:none'" if password_hash else ""}>
 
 <div class="header">
   <h1>📊 Trading Report</h1>
@@ -413,6 +461,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis):
   </div>
 
 </div>
+</div>
 </body>
 </html>"""
     return html
@@ -432,7 +481,9 @@ def main():
     analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
 
     logger.info("Building HTML...")
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis)
+    pwd = os.environ.get("SITE_PASSWORD", "")
+    pwd_hash = hashlib.sha256(pwd.encode()).hexdigest() if pwd else ""
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash)
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
