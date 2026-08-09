@@ -47,33 +47,6 @@
     <p id="err" style="color:#dc2626;font-size:13px;margin-top:12px;display:none">Password errata</p>
   </div>
 </div>
-<script>
-  const HASH = "ca51faf8db2ae0338a5246d610fab1b01e953811150be1dab288927da73c4440";
-  async function sha256(msg) {
-    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
-  }
-  async function unlock() {
-    const h = await sha256(document.getElementById("pwd").value);
-    if (h === HASH) {
-      document.getElementById("lock").style.display = "none";
-      document.getElementById("report").style.display = "block";
-      localStorage.setItem("tr_auth", h);
-      localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
-    } else {
-      document.getElementById("err").style.display = "block";
-    }
-  }
-  document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
-  document.addEventListener("DOMContentLoaded", async () => {
-    const h = localStorage.getItem("tr_auth");
-    const exp = localStorage.getItem("tr_exp");
-    if (h && exp && Date.now() < +exp && h === HASH) {
-      document.getElementById("lock").style.display = "none";
-      document.getElementById("report").style.display = "block";
-    }
-  });
-</script>
 
 <div id="report" style='display:none'>
 
@@ -88,7 +61,7 @@
   <div class="section">
     <h2>Contesto di Mercato</h2>
     <div class="idx-grid"><div class="idx-card"><div class="idx-name">S&P 500</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.62%</span></div></div><div class="idx-card"><div class="idx-name">NASDAQ</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+1.30%</span></div></div><div class="idx-card"><div class="idx-name">Eurostoxx 50</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.33%</span></div></div><div class="idx-card"><div class="idx-name">FTSE MIB</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.06%</span></div></div></div>
-    <div class="contesto">Mercati in territorio positivo con NASDAQ in evidenza (+1.30%), mentre gli indici europei mostrano performance modeste. Sentiment rialzista sui titoli tech e difensivi, con RSI elevati segnalando possibili correzioni nel breve termine su asset già molto estesi.</div>
+    <div class="contesto">Mercati con sentiment positivo, sostenuti da rally del NASDAQ (+1.30%) e buona performance USA. Europa più cauta con Eurostoxx in territorio positivo ma FTSE MIB piatto. Prevalenza di asset con momentum rialzista, tuttavia diversi indicatori RSI in zone di ipercomprato segnalano cautela sui massimi.</div>
   </div>
 
   <!-- TOP 10 AZIONI ITALIANE -->
@@ -109,18 +82,18 @@
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish Engulfing ▲</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444">Momentum eccezionale su 3 mesi (+38.1%) con RSI 69.1 in prossimità di ipercomprato. Titolo in forte up-trend ma presenta rischio di consolidamento dopo la fase rialzista. Attesa prudente per pull-back prima di nuovi accumuli.</td>
+            <td style="font-size:13px;color:#444">Performance eccezionale a 3 mesi (+38.1%) con RSI elevato a 69.1, segnale di forte momentum rialzista. Tuttavia prossimità alla zona di ipercomprato suggerisce prudenza. Consolidamento benefico prima di nuovi rialzi.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">2</td>
             <td><strong>DIA.MI</strong></td>
             <td>75.40</td>
-            <td>64.3</td>
-            <td><span style="color:#16a34a;font-weight:600">+9.6%</span></td>
-            <td><span style="color:#16a34a;font-weight:600">+8.9%</span></td>
+            <td>66.0</td>
+            <td><span style="color:#16a34a;font-weight:600">+8.4%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+12.5%</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish Engulfing ▲</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
-            <td style="font-size:13px;color:#444">Performance robusta a 1 mese (+9.6%) con RSI 64.3 in zona equilibrata. Momentum su 3 mesi contenuto (+8.9%) suggerisce apprezzamento sostenibile senza eccessi. Base tecnica più solida rispetto a BMPS.</td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">Gains robusti a 1M (+8.4%) e 3M (+12.5%) con RSI 66.0 in territorio rialzista ma ancora gestibile. Momentum sostenuto senza eccessi di surriscaldamento tecnico.</td>
         </tr></tbody>
     </table>
   </div>
@@ -143,7 +116,7 @@
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444">RSI 70.0 in ipercomprato con gain mensile straordinario (+35.7%). Beneficia del sentiment AI ma espone a correzione tecnica imminente. Attendere consolidamento prima di entry.</td>
+            <td style="font-size:13px;color:#444">Performance stellare a 1M (+35.7%) ma RSI 70.0 segnala ipercomprato marcato. Consolidamento tattico opportuno prima di ulteriori rialzi; esposizione già elevata al tema AI.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">2</td>
             <td><strong>NET</strong></td>
@@ -153,8 +126,8 @@
             <td><span style="color:#16a34a;font-weight:600">+53.1%</span></td>
             <td><span style="color:#dc2626;font-size:12px">Bearish</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
-            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
-            <td style="font-size:13px;color:#444">Crescita trimestrale notevole (+53.1%) con RSI 64.8 ancora in range gestibile. Momentum prolungato su più cicli suggerisce qualità sottostante del trend. Quality play nel cloud/cyber.</td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">Exceptional 3M return (+53.1%) con RSI 64.8 ancora in range sostenibile. Cybersecurity rimane tema strategico; entrata suggerita su ritracciamenti.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">3</td>
             <td><strong>NOW</strong></td>
@@ -165,7 +138,7 @@
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444">RSI 67.1 prossimo a ipercomprato con performance trimestrale solida (+37.0%). SaaS leader ma prezzo riflette già buona parte dell'ottimismo. Mantenere posizioni esistenti, aspettare dip per aumenti.</td>
+            <td style="font-size:13px;color:#444">Gains coerenti (+15.9% 1M, +37.0% 3M) con RSI 67.1 in territory rialzista controllato. Software enterprise mantiene fondamentali solidi.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">4</td>
             <td><strong>XOM</strong></td>
@@ -176,7 +149,7 @@
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#888;font-size:12px">Doji</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444"></td>
+            <td style="font-size:13px;color:#444">RSI 58.7 in territorio neutrale con performance modesta (+10.2% 1M). Valido per diversificazione energetica; attualmente senza slancio particolare.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">5</td>
             <td><strong>LLY</strong></td>
@@ -187,7 +160,7 @@
             <td><span style="color:#888;font-size:12px">Doji</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish Engulfing ▲</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444">RSI 56.8 in equilibrio con gain trimestrale significativo (+25.2%) ma momentum mensile piatto (-0.2%). Titolo fondamentale ma carente di appeal speculativo nel breve. Holding per investitori long-term.</td>
+            <td style="font-size:13px;color:#444"></td>
         </tr></tbody>
     </table>
   </div>
@@ -203,19 +176,19 @@
       <tbody><tr>
             <td style="color:#999;font-size:12px">1</td>
             <td><strong>THNQ</strong></td>
-            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td style="color:#6366f1;font-size:13px">AI e Next Generation</td>
             <td>90.54</td>
             <td>63.1</td>
             <td><span style="color:#16a34a;font-weight:600">+1.4%</span></td>
             <td><span style="color:#16a34a;font-weight:600">+14.5%</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444"></td>
+            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
+            <td style="font-size:13px;color:#444">Esposizione concentrata su AI con RSI 63.1 equilibrato. Performance 3M moderate (+14.5%) suggeriscono sottovalutazione rispetto ai competitor; ideale per core allocation tematica.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">2</td>
             <td><strong>MOAT</strong></td>
-            <td style="color:#6366f1;font-size:13px">Competitive Advantage / Quality</td>
+            <td style="color:#6366f1;font-size:13px">Wide Moat / Qualità</td>
             <td>112.27</td>
             <td>74.5</td>
             <td><span style="color:#16a34a;font-weight:600">+5.7%</span></td>
@@ -223,7 +196,7 @@
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444">RSI 74.5 in ipercomprato segnala rally esteso. Performance trimestrale modesta (+10.6%) non giustifica valutazione tecnica. Posizionamento difensivo ma overesteso nel breve, attendere correzione.</td>
+            <td style="font-size:13px;color:#444">RSI 74.5 elevato segnala ipercomprato marcato ma il tema 'wide moat' fornisce protezione. Attendere consolidamento prima di nuova accumulazione.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">3</td>
             <td><strong>HACK</strong></td>
@@ -235,7 +208,7 @@
             <td><span style="color:#888;font-size:12px">Doji</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
-            <td style="font-size:13px;color:#444">Momentum trimestrale forte (+34.8%) con RSI 60.7 in equilibrio sano. Tema cybersecurity in eccellente posizione strutturale. Accumulo graduale consigliato sui eventuali dip.</td>
+            <td style="font-size:13px;color:#444">Performance eccellente a 3M (+34.8%) con RSI 60.7 equilibrato. Tema ciclico in favore con crescente demand enterprise; posizionamento strategico.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">4</td>
             <td><strong>IBB</strong></td>
@@ -246,12 +219,12 @@
             <td><span style="color:#16a34a;font-weight:600">+16.4%</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish Engulfing ▲</span></td>
-            <td><span style="color:#16a34a;font-weight:700">● Forte</span></td>
-            <td style="font-size:13px;color:#444">RSI 68.9 in zona rialzista con momentum positivo su 3M (+16.4%). Settore biotecnologico in ripresa con entry point ragionevole. Diversificazione settoriale consigliata.</td>
+            <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
+            <td style="font-size:13px;color:#444">RSI 68.9 prossimo a ipercomprato ma performance 3M moderate (+16.4%) mantenono razionalità valutativa. Sector rimane interessante per dinamiche fondamentali.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">5</td>
             <td><strong>XBI</strong></td>
-            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td style="color:#6366f1;font-size:13px">Small-Cap Biotech</td>
             <td>157.37</td>
             <td>61.1</td>
             <td><span style="color:#dc2626;font-weight:600">-1.0%</span></td>
@@ -259,11 +232,11 @@
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish Engulfing ▲</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444"></td>
+            <td style="font-size:13px;color:#444">Performance 3M positive (+16.9%) con RSI 61.1 gestibile. Small-cap offering offre upside potential rispetto mega-cap biotech; sottoperformance 1M temporanea.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">6</td>
             <td><strong>ARKQ</strong></td>
-            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td style="color:#6366f1;font-size:13px">Robotica e AI Industriale</td>
             <td>127.85</td>
             <td>64.4</td>
             <td><span style="color:#16a34a;font-weight:600">+3.1%</span></td>
@@ -271,7 +244,7 @@
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish Engulfing ▲</span></td>
             <td><span style="color:#d97706;font-weight:700">● Moderato</span></td>
-            <td style="font-size:13px;color:#444"></td>
+            <td style="font-size:13px;color:#444">Performance negativa 3M (-5.2%) nonostante momentum 1M positivo crea confusione direzionale. RSI 64.4 neutrale; attendere chiarificazione trend prima di posizionamento.</td>
         </tr><tr>
             <td style="color:#999;font-size:12px">7</td>
             <td><strong>ARKF</strong></td>
@@ -303,7 +276,7 @@
             <td style="color:#dc2626;font-weight:600">Ribassista</td>
             <td><span style="color:#dc2626;font-weight:600">-1.8%</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td style="font-size:13px;color:#444">RSI 41.5 su trend ribassista con perdita mensile (-1.8%). Momentum negativo persistente senza segnali di inversione. Ridimensionare per liberare capitale verso asset con migliori prospettive.</td>
+            <td style="font-size:13px;color:#444">RSI 41.5 in territorio oversold con trend ribassista confermato. Decadimento -1.8% mensile suggerisce perdita di momentum. Uscita strategica consigliata per riponderare il portafoglio verso asset con migliore dinamica.</td>
         </tr><tr>
             <td><strong>WisdomTree Brent Crude Oil 2x Lev.</strong><br><span style="color:#999;font-size:11px">LBRT.MI</span></td>
             <td style="font-size:12px;color:#666">ETC (2x leva)</td>
@@ -312,7 +285,7 @@
             <td style="color:#dc2626;font-weight:600">Ribassista</td>
             <td><span style="color:#16a34a;font-weight:600">+14.0%</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td style="font-size:13px;color:#444">ETF a leva 2x su Brent con RSI 44.8 in trend ribassista. Rischio decay giornaliero significativo su orizzonti > 1 settimana. Il +14% mensile è erosione di valore reale per holding. Liquidare e passare a XOM per expo oil senza decay.</td>
+            <td style="font-size:13px;color:#444">ETF con leva 2x su Brent: nonostante +14.0% 1M, il risk decay da reset giornaliero della leva erode valore nel time. RSI 44.8 ribassista; petrolio volatile non giustifica esposizione leverata.</td>
         </tr><tr>
             <td><strong>WisdomTree Physical Gold EUR Hedged</strong><br><span style="color:#999;font-size:11px">GBSE.MI</span></td>
             <td style="font-size:12px;color:#666">ETC</td>
@@ -321,7 +294,7 @@
             <td style="color:#16a34a;font-weight:600">Rialzista</td>
             <td><span style="color:#16a34a;font-weight:600">+6.0%</span></td>
             <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
-            <td style="font-size:13px;color:#444">RSI 70.3 in ipercomprato ma trend rialzista confermato. Gold beneficia di incertezza macro. Mantenere come hedge, attendere RSI > 75 per prese di profitto parziali.</td>
+            <td style="font-size:13px;color:#444">Oro hedged EUR con RSI 70.3 elevato ma trend rialzista solido. Performance +6.0% 1M convalida theme defensivo; mantenere come hedge contro volatilità macro.</td>
         </tr><tr>
             <td><strong>VanEck Defense UCITS ETF</strong><br><span style="color:#999;font-size:11px">DFNS.MI</span></td>
             <td style="font-size:12px;color:#666">ETF</td>
@@ -330,7 +303,7 @@
             <td style="color:#16a34a;font-weight:600">Rialzista</td>
             <td><span style="color:#16a34a;font-weight:600">+11.9%</span></td>
             <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
-            <td style="font-size:13px;color:#444">RSI 79.3 severamente ipercomprato con trend rialzista. Defense tema strutturalmente positivo ma posizione necessita ridimensionamento. Vendita parziale per lock-in profitti già realizzati.</td>
+            <td style="font-size:13px;color:#444">RSI 79.3 estremamente ipercomprato ma trend rialzista forte (+11.9% 1M) riflette ciclo difesa positivo. Non aggiungere, consolidare posizione esistente; theme geopolitico supporta.</td>
         </tr><tr>
             <td><strong>VanEck Semiconductor UCITS ETF</strong><br><span style="color:#999;font-size:11px">SMH.MI</span></td>
             <td style="font-size:12px;color:#666">ETF</td>
@@ -339,7 +312,7 @@
             <td style="color:#16a34a;font-weight:600">Rialzista</td>
             <td><span style="color:#dc2626;font-weight:600">-6.4%</span></td>
             <td><span style="color:#16a34a;font-weight:700">● Accumula</span></td>
-            <td style="font-size:13px;color:#444">RSI 51.1 neutrale con flessione recente (-6.4% 1M) nonostante trend rialzista. Pull-back interessante in settore fondamentale (semiconduttori). Acquistare su debolezza corrente.</td>
+            <td style="font-size:13px;color:#444">Performance 1M negativa (-6.4%) crea opportunità su tema semiconductor strutturalmente positivo. RSI 51.1 neutrale favorevole a accumulo; correction tattica su trend rialzista confermato 3M.</td>
         </tr><tr>
             <td><strong>iShares STOXX Europe 600 UCITS ETF</strong><br><span style="color:#999;font-size:11px">EXSA.MI</span></td>
             <td style="font-size:12px;color:#666">ETF</td>
@@ -348,7 +321,7 @@
             <td style="color:#16a34a;font-weight:600">Rialzista</td>
             <td><span style="color:#16a34a;font-weight:600">+3.1%</span></td>
             <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
-            <td style="font-size:13px;color:#444">RSI 75.2 in ipercomprato ma posizione di qualità (large-cap europeo). Mantenere per stabilità portafoglio. Parziale rebalancing consigliato solo se RSI > 80.</td>
+            <td style="font-size:13px;color:#444">RSI 75.2 in ipercomprato con trend rialzista marcato. Broad exposure europea ben performante; non aggiungere ai massimi, mantenere core allocation.</td>
         </tr><tr>
             <td><strong>LVMH</strong><br><span style="color:#999;font-size:11px">MC.PA</span></td>
             <td style="font-size:12px;color:#666">Azione</td>
@@ -357,7 +330,7 @@
             <td style="color:#d97706;font-weight:600">Laterale</td>
             <td><span style="color:#dc2626;font-weight:600">-2.0%</span></td>
             <td><span style="color:#16a34a;font-weight:700">● Accumula</span></td>
-            <td style="font-size:13px;color:#444">RSI 45.8 neutrale con trend laterale e drawdown recente (-2.0% 1M). LVMH sottoperforma luxury cycle rialzista. Accumulo in media su view di rimbalzo structurale nel segmento luxury.</td>
+            <td style="font-size:13px;color:#444">LVMH in trend laterale con RSI 45.8 neutrale e decadimento -2.0% 1M offre entry point migliorato. Lusso rimane resiliente; accumulazione tattica su weakness è opportuna.</td>
         </tr><tr>
             <td><strong>Rocket One Inc</strong><br><span style="color:#999;font-size:11px">RKTO</span></td>
             <td style="font-size:12px;color:#666">Azione</td>
@@ -366,10 +339,10 @@
             <td style="color:#dc2626;font-weight:600">Ribassista</td>
             <td><span style="color:#dc2626;font-weight:600">-15.4%</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td style="font-size:13px;color:#444">RSI 37.0 in ipervenduto con trend ribassista severo e calo mensile (-15.4%). Titolo micro-cap con fondamentali deteriorati. Ridurre drasticamente esposizione anche per limitazione rischio concentrazione.</td>
+            <td style="font-size:13px;color:#444">Crollo significativo -15.4% 1M con RSI 37.0 gravemente oversold e trend ribassista confermato. Small-cap space rischioso; liquidazione strategica prioritaria per liberare capitale.</td>
         </tr></tbody>
     </table>
-    <div class="sintesi"><strong>Sintesi operativa:</strong> Portfolio Stefano presenta overexposure su asset ipercomprati (DFNS.MI RSI 79.3, GBSE.MI RSI 70.3, EXSA.MI RSI 75.2). Priorità: liquidare LBRT.MI per decay risk della leva, ridurre OMER.MI e RKTO in downtrend, consolidare DFNS su resistenza. Reallocate su SMH.MI (pull-back attrattivo) e MC.PA (laterale con potenziale). Obiettivo: bilanciare momentum rialzista con gestione del rischio di correzione su orizzonti 2-4 settimane.</div>
+    <div class="sintesi"><strong>Sintesi operativa:</strong> Portafoglio Stefano mostra mix di posizioni difensive (oro, difesa) e cicliche (semiconduttori, lusso) ben bilanciate, ma soffre di esposizioni deteriorate (OMER, RKTO, LBRT con decay). Operatività consigliata: liquidare OMER, RKTO e LBRT per redistribuire verso SMH (accumulo su weakness), MC.PA (valuation attractiva) e ETF tematici AI/Cybersecurity (THNQ, HACK). Mantenere defensivi core su GBSE, DFNS, EXSA. Target: portafoglio più orientato a tema AI e tecnologia, con ratio rischio/rendimento migliorato.</div>
   </div>
 
   <!-- FOOTER -->
@@ -379,10 +352,38 @@
       Le decisioni di investimento sono responsabilità esclusiva dell'investitore.
       I dati tecnici sono calcolati su prezzi storici di chiusura e potrebbero non riflettere le quotazioni in tempo reale.
     </p>
-    <p class="gen-time">Generato il 09/08/2026 18:54 UTC</p>
+    <p class="gen-time">Generato il 09/08/2026 21:28 UTC</p>
   </div>
 
 </div>
 </div>
+
+<script>
+  const HASH = "ca51faf8db2ae0338a5246d610fab1b01e953811150be1dab288927da73c4440";
+  async function sha256(msg) {
+    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  }
+  async function unlock() {
+    const h = await sha256(document.getElementById("pwd").value);
+    if (h === HASH) {
+      document.getElementById("lock").style.display = "none";
+      document.getElementById("report").style.display = "block";
+      localStorage.setItem("tr_auth", h);
+      localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
+    } else {
+      document.getElementById("err").style.display = "block";
+    }
+  }
+  document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
+  (async () => {
+    const h = localStorage.getItem("tr_auth");
+    const exp = localStorage.getItem("tr_exp");
+    if (h && exp && Date.now() < +exp && h === HASH) {
+      document.getElementById("lock").style.display = "none";
+      document.getElementById("report").style.display = "block";
+    }
+  })();
+</script>
 </body>
 </html>
