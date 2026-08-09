@@ -409,7 +409,7 @@ def portfolio_rows(portfolio, analysis_map):
         </tr>"""
     return rows
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash=""):
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]"):
     today = datetime.now().strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
@@ -446,6 +446,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     lock_script = f"""
 <script>
   const HASH = "{password_hash}";
+  const PORTFOLIO_BASE = {portfolio_base};
+
+  // ─── Autenticazione ───────────────────────────────────────────────────────
   async function sha256(msg) {{
     const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
@@ -457,6 +460,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       document.getElementById("report").style.display = "block";
       localStorage.setItem("tr_auth", h);
       localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
+      initEditor();
     }} else {{
       document.getElementById("err").style.display = "block";
     }}
@@ -468,8 +472,152 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (h && exp && Date.now() < +exp && h === HASH) {{
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
+      initEditor();
     }}
   }})();
+
+  // ─── Editor Portafoglio ───────────────────────────────────────────────────
+  let editorPortfolio = [];
+
+  function initEditor() {{
+    const saved = localStorage.getItem("editor_portfolio");
+    editorPortfolio = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(PORTFOLIO_BASE));
+    renderEditorTable();
+    const owner = localStorage.getItem("gh_owner") || "";
+    const repo  = localStorage.getItem("gh_repo")  || "";
+    const token = localStorage.getItem("gh_token") || "";
+    document.getElementById("gh-owner").value = owner;
+    document.getElementById("gh-repo").value  = repo;
+    if (owner && repo && token) {{
+      document.getElementById("gh-config").style.display = "none";
+      document.getElementById("gh-config-saved").style.display = "block";
+    }}
+  }}
+
+  function renderEditorTable() {{
+    document.getElementById("editor-tbody").innerHTML = editorPortfolio.map((item, i) => `
+      <tr style="border-bottom:1px solid #e2e8f0">
+        <td style="padding:8px 4px">
+          <input value="${{item.symbol}}" onchange="updateItem(${{i}},'symbol',this.value.toUpperCase().trim())"
+            style="width:100px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;font-family:monospace">
+        </td>
+        <td style="padding:8px 4px">
+          <input value="${{item.name}}" onchange="updateItem(${{i}},'name',this.value)"
+            style="width:170px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+        </td>
+        <td style="padding:8px 4px">
+          <select onchange="updateItem(${{i}},'type',this.value)"
+            style="padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
+            <option ${{item.type==='Azione'?'selected':''}}>Azione</option>
+            <option ${{item.type==='ETF'?'selected':''}}>ETF</option>
+            <option ${{item.type==='Leveraged ETF'?'selected':''}}>Leveraged ETF</option>
+            <option ${{item.type==='ETF Commodity'?'selected':''}}>ETF Commodity</option>
+          </select>
+        </td>
+        <td style="padding:8px 4px;text-align:center">
+          <button onclick="removeItem(${{i}})" title="Rimuovi"
+            style="color:#dc2626;background:none;border:none;cursor:pointer;font-size:20px;line-height:1;padding:2px">×</button>
+        </td>
+      </tr>`).join("");
+  }}
+
+  function updateItem(i, field, value) {{
+    editorPortfolio[i][field] = value;
+    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
+  }}
+
+  function removeItem(i) {{
+    editorPortfolio.splice(i, 1);
+    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
+    renderEditorTable();
+  }}
+
+  function addEditorRow() {{
+    editorPortfolio.push({{symbol:"",name:"",type:"Azione"}});
+    renderEditorTable();
+    setTimeout(() => {{
+      const inputs = document.querySelectorAll("#editor-tbody input");
+      if (inputs.length >= 2) inputs[inputs.length - 2].focus();
+    }}, 50);
+  }}
+
+  function showGhConfig() {{
+    document.getElementById("gh-config").style.display = "block";
+    document.getElementById("gh-config-saved").style.display = "none";
+  }}
+
+  function saveGhConfig() {{
+    const owner = document.getElementById("gh-owner").value.trim();
+    const repo  = document.getElementById("gh-repo").value.trim();
+    const token = document.getElementById("gh-token").value.trim();
+    if (!owner || !repo || !token) {{ alert("Compila tutti i campi"); return; }}
+    localStorage.setItem("gh_owner", owner);
+    localStorage.setItem("gh_repo",  repo);
+    localStorage.setItem("gh_token", token);
+    document.getElementById("gh-config").style.display = "none";
+    document.getElementById("gh-config-saved").style.display = "block";
+    setStatus("✅ Impostazioni salvate", "#16a34a", 3000);
+  }}
+
+  function setStatus(msg, color, timeout) {{
+    const el = document.getElementById("editor-status");
+    el.textContent = msg; el.style.color = color;
+    if (timeout) setTimeout(() => {{ el.textContent = ""; }}, timeout);
+  }}
+
+  async function triggerReport(btn) {{
+    const owner = localStorage.getItem("gh_owner");
+    const repo  = localStorage.getItem("gh_repo");
+    const token = localStorage.getItem("gh_token");
+    if (!owner || !repo || !token) {{
+      showGhConfig();
+      setStatus("⚠️ Configura prima le impostazioni GitHub", "#d97706");
+      return;
+    }}
+    const valid = editorPortfolio.filter(p => p.symbol.trim() && p.name.trim());
+    if (!valid.length) {{ setStatus("⚠️ Aggiungi almeno un titolo valido", "#d97706"); return; }}
+    btn.disabled = true;
+    try {{
+      setStatus("⏳ Connessione a GitHub...", "#d97706");
+      const keyR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/secrets/public-key`, {{
+        headers: {{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json"}}
+      }});
+      if (!keyR.ok) throw new Error(`Errore chiave pubblica: HTTP ${{keyR.status}}`);
+      const {{key_id, key}} = await keyR.json();
+
+      setStatus("⏳ Cifratura portafoglio...", "#d97706");
+      await sodium.ready;
+      const pubKey    = sodium.from_base64(key, sodium.base64_variants.ORIGINAL);
+      const plaintext = sodium.from_string(JSON.stringify(valid));
+      const encrypted = sodium.crypto_box_seal(plaintext, pubKey);
+      const encB64    = sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL);
+
+      setStatus("⏳ Aggiornamento secret GitHub...", "#d97706");
+      const secR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/secrets/PORTFOLIO_JSON`, {{
+        method:"PUT",
+        headers:{{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json","Content-Type":"application/json"}},
+        body:JSON.stringify({{encrypted_value:encB64,key_id}})
+      }});
+      if (secR.status !== 201 && secR.status !== 204) throw new Error(`Errore update secret: HTTP ${{secR.status}}`);
+
+      setStatus("⏳ Avvio generazione report...", "#d97706");
+      const wfR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/workflows/trading_report.yml/dispatches`, {{
+        method:"POST",
+        headers:{{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json","Content-Type":"application/json"}},
+        body:JSON.stringify({{ref:"main"}})
+      }});
+      if (wfR.status !== 204) throw new Error(`Errore avvio workflow: HTTP ${{wfR.status}}`);
+
+      localStorage.setItem("editor_portfolio", JSON.stringify(valid));
+      editorPortfolio = valid;
+      renderEditorTable();
+      setStatus("✅ Report avviato! Pronto in ~3-5 minuti. Aggiorna la pagina (F5) per vederlo.", "#16a34a");
+    }} catch(e) {{
+      setStatus(`❌ ${{e.message}}`, "#dc2626");
+    }} finally {{
+      btn.disabled = false;
+    }}
+  }}
 </script>
 """ if password_hash else ""
 
@@ -479,6 +627,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Trading Report — {today}</title>
+<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/modules/libsodium-wrappers.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #1a1a2e; }}
@@ -572,6 +721,61 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <div class="sintesi"><strong>Sintesi operativa:</strong> {analysis.get('sintesi_portafoglio','')}</div>
   </div>
 
+  <!-- AGGIORNA PORTAFOGLIO -->
+  <div class="section">
+    <h2>🔧 Aggiorna Portafoglio</h2>
+    <div id="gh-config" style="background:#f0f4f8;border-radius:8px;padding:16px;margin-bottom:16px">
+      <p style="font-size:13px;color:#555;margin-bottom:12px">Inserisci una volta le credenziali GitHub — vengono salvate nel browser.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div>
+          <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">GitHub Username</label>
+          <input id="gh-owner" type="text" placeholder="es. miouser"
+            style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+        </div>
+        <div>
+          <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Repository name</label>
+          <input id="gh-repo" type="text" placeholder="es. trading-report"
+            style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">Personal Access Token (scope: <code>repo</code>)</label>
+        <input id="gh-token" type="password" placeholder="ghp_..."
+          style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+      </div>
+      <button onclick="saveGhConfig()"
+        style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+        Salva impostazioni
+      </button>
+    </div>
+    <div id="gh-config-saved" style="display:none;font-size:13px;color:#555;margin-bottom:12px">
+      Impostazioni GitHub caricate. <a href="#" onclick="showGhConfig();return false" style="color:#1e3a5f">Modifica</a>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+      <thead>
+        <tr style="background:#1e3a5f;color:white">
+          <th style="padding:10px;text-align:left;font-size:12px">Simbolo Yahoo Finance</th>
+          <th style="padding:10px;text-align:left;font-size:12px">Nome</th>
+          <th style="padding:10px;text-align:left;font-size:12px">Tipo</th>
+          <th style="padding:10px;width:36px"></th>
+        </tr>
+      </thead>
+      <tbody id="editor-tbody"></tbody>
+    </table>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px">
+      <button onclick="addEditorRow()"
+        style="background:#e2e8f0;color:#1e3a5f;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px">
+        + Aggiungi titolo
+      </button>
+      <button onclick="triggerReport(this)"
+        style="background:#16a34a;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+        🚀 Aggiorna Report
+      </button>
+      <span id="editor-status" style="font-size:13px"></span>
+    </div>
+    <p style="font-size:11px;color:#999;margin-top:10px">Il portafoglio viene cifrato e salvato come secret GitHub — non è visibile nel repository.</p>
+  </div>
+
   <!-- FOOTER -->
   <div class="section">
     <p class="disclaimer">
@@ -605,7 +809,11 @@ def main():
     logger.info("Building HTML...")
     pwd = os.environ.get("SITE_PASSWORD", "")
     pwd_hash = hashlib.sha256(pwd.encode()).hexdigest() if pwd else ""
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash)
+    portfolio_base = json.dumps([
+        {"symbol": p["symbol"], "name": p.get("name", p["symbol"]), "type": p.get("type", "Azione")}
+        for p in PORTFOLIO
+    ], ensure_ascii=False)
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base)
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
