@@ -17,16 +17,10 @@ logger = logging.getLogger(__name__)
 
 # ─── CONFIGURAZIONE ───────────────────────────────────────────────────────────
 
-PORTFOLIO = [
-    {"symbol": "OMER.MI", "name": "OMER",                                   "type": "Azione"},
-    {"symbol": "LBRT.MI", "name": "WisdomTree Brent Crude Oil 2x Lev.",     "type": "ETC (2x leva)"},
-    {"symbol": "GBSE.MI", "name": "WisdomTree Physical Gold EUR Hedged",     "type": "ETC"},
-    {"symbol": "DFNS.MI", "name": "VanEck Defense UCITS ETF",               "type": "ETF"},
-    {"symbol": "SMH.MI",  "name": "VanEck Semiconductor UCITS ETF",         "type": "ETF"},
-    {"symbol": "EXSA.MI", "name": "iShares STOXX Europe 600 UCITS ETF",     "type": "ETF"},
-    {"symbol": "MC.PA",   "name": "LVMH",                                   "type": "Azione"},
-    {"symbol": "RKTO",    "name": "Rocket One Inc",                         "type": "Azione"},
-]
+# Il portafoglio è caricato da un GitHub Secret (PORTFOLIO_JSON) — non è nel codice.
+# Formato del secret: JSON array, es:
+# [{"symbol":"OMER.MI","name":"OMER","type":"Azione"}, ...]
+PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
 
 STOCK_UNIVERSE_IT = [
     "ENI.MI", "ENEL.MI", "ISP.MI", "UCG.MI", "STM.MI", "RACE.MI",
