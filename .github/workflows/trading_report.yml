@@ -3,9 +3,11 @@ name: Daily Trading Report
 on:
   schedule:
     # 10:30 ora italiana estiva (CEST = UTC+2) → 08:30 UTC
-    # In inverno (CET = UTC+1) il report arriverà alle 09:30 italiana
-    - cron: '30 6 * * 1-5'
-  workflow_dispatch:  # permette l'esecuzione manuale dalla UI di GitHub
+    - cron: '30 8 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   generate-report:
@@ -24,10 +26,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Generate and upload trading report
+      - name: Generate HTML report
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GDRIVE_CLIENT_ID: ${{ secrets.GDRIVE_CLIENT_ID }}
-          GDRIVE_CLIENT_SECRET: ${{ secrets.GDRIVE_CLIENT_SECRET }}
-          GDRIVE_REFRESH_TOKEN: ${{ secrets.GDRIVE_REFRESH_TOKEN }}
         run: python generate_report.py
+
+      - name: Encrypt with Staticrypt
+        run: |
+          npm install -g @hscrypto/staticrypt
+          staticrypt docs/index.html \
+            --password "${{ secrets.SITE_PASSWORD }}" \
+            --output docs/index.html \
+            --remember 7 \
+            --template-title "Trading Report" \
+            --no-export
+
+      - name: Commit and push report
+        run: |
+          git config user.name "trading-bot"
+          git config user.email "bot@trading-report"
+          git add docs/index.html
+          git diff --staged --quiet || git commit -m "report: $(date +'%Y-%m-%d')"
+          git push
