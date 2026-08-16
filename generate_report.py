@@ -25,7 +25,13 @@ logging.getLogger("peewee").setLevel(logging.CRITICAL)
 # Il portafoglio è caricato da un GitHub Secret (PORTFOLIO_JSON) — non è nel codice.
 # Formato del secret: JSON array, es:
 # [{"symbol":"OMER.MI","name":"OMER","type":"Azione"}, ...]
-PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
+_portfolio_input = os.environ.get("PORTFOLIO_INPUT", "").strip()
+if _portfolio_input:
+    PORTFOLIO = json.loads(_portfolio_input)
+    logger.info("Portfolio caricato da input manuale (workflow_dispatch)")
+else:
+    PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
+    logger.info("Portfolio caricato da PORTFOLIO_JSON secret")
 
 STOCK_UNIVERSE_IT = [
     # FTSE MIB — simboli Yahoo Finance verificati (formato TICKER.MI)
@@ -578,40 +584,20 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (!valid.length) {{ setStatus("⚠️ Aggiungi almeno un titolo valido", "#d97706"); return; }}
     btn.disabled = true;
     try {{
-      setStatus("⏳ Connessione a GitHub...", "#d97706");
-      const keyR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/secrets/public-key`, {{
-        headers: {{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json"}}
-      }});
-      if (!keyR.ok) throw new Error(`Errore chiave pubblica: HTTP ${{keyR.status}}`);
-      const {{key_id, key}} = await keyR.json();
-
-      setStatus("⏳ Cifratura portafoglio...", "#d97706");
-      await sodium.ready;
-      const pubKey    = sodium.from_base64(key, sodium.base64_variants.ORIGINAL);
-      const plaintext = sodium.from_string(JSON.stringify(valid));
-      const encrypted = sodium.crypto_box_seal(plaintext, pubKey);
-      const encB64    = sodium.to_base64(encrypted, sodium.base64_variants.ORIGINAL);
-
-      setStatus("⏳ Aggiornamento secret GitHub...", "#d97706");
-      const secR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/secrets/PORTFOLIO_JSON`, {{
-        method:"PUT",
-        headers:{{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json","Content-Type":"application/json"}},
-        body:JSON.stringify({{encrypted_value:encB64,key_id}})
-      }});
-      if (secR.status !== 201 && secR.status !== 204) throw new Error(`Errore update secret: HTTP ${{secR.status}}`);
-
       setStatus("⏳ Avvio generazione report...", "#d97706");
       const wfR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/workflows/trading_report.yml/dispatches`, {{
         method:"POST",
         headers:{{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json","Content-Type":"application/json"}},
-        body:JSON.stringify({{ref:"main"}})
+        body:JSON.stringify({{ref:"main", inputs:{{portfolio_json: JSON.stringify(valid)}}}})
       }});
-      if (wfR.status !== 204) throw new Error(`Errore avvio workflow: HTTP ${{wfR.status}}`);
-
+      if (wfR.status !== 204) {{
+        const err = await wfR.text();
+        throw new Error(`HTTP ${{wfR.status}}: ${{err}}`);
+      }}
       localStorage.setItem("editor_portfolio", JSON.stringify(valid));
       editorPortfolio = valid;
       renderEditorTable();
-      setStatus("✅ Report avviato! Pronto in ~3-5 minuti. Aggiorna la pagina (F5) per vederlo.", "#16a34a");
+      setStatus("✅ Report avviato! Pronto in ~3-5 minuti. Premi F5 per aggiornare la pagina.", "#16a34a");
     }} catch(e) {{
       setStatus(`❌ ${{e.message}}`, "#dc2626");
     }} finally {{
@@ -627,7 +613,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Trading Report — {today}</title>
-<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/browsers/sodium.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #1a1a2e; }}
@@ -790,7 +775,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       </button>
       <span id="editor-status" style="font-size:13px"></span>
     </div>
-    <p style="font-size:11px;color:#999;margin-top:10px">Il portafoglio viene cifrato e salvato come secret GitHub — non è visibile nel repository.</p>
+    <p style="font-size:11px;color:#999;margin-top:10px">Il portafoglio aggiornato viene usato subito e salvato come secret GitHub dal workflow — non è visibile nel repository.</p>
   </div>
 
   <!-- FOOTER -->
