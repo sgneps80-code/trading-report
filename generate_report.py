@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Trading Report Generator — GitHub Pages Edition
@@ -628,7 +627,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Trading Report — {today}</title>
-<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/modules/libsodium-wrappers.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/browsers/sodium.js"></script>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8fafc; color: #1a1a2e; }}
