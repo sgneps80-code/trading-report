@@ -551,6 +551,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     return "Azione";
   }}
 
+  var _searchResults = [];
   var _searchTimer = null;
   function onSearchInput() {{
     clearTimeout(_searchTimer);
@@ -601,20 +602,19 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   }}
 
   function showDropdown(results) {{
+    _searchResults = results.slice(0, 10);
     var dd = document.getElementById("search-dropdown");
-    dd.innerHTML = results.slice(0, 10).map(function(q) {{
+    dd.innerHTML = _searchResults.map(function(q, idx) {{
       var sym = q.symbol || "";
       var nm  = q.shortname || q.longname || sym;
       var ex  = q.exchDisp || q.exchange || "";
       var tp  = guessType(q);
-      var symE = sym.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
-      var nmE  = nm.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
-      return '<div onmousedown="addFromSearch(\'' + symE + "','" + nmE + "','" + tp + "')" +
-        ' style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px"' +
-        ' onmouseover="this.style.background=\'#f0f4f8\'" onmouseout="this.style.background=\'\'">' +
+      return '<div onmousedown="addFromSearch(' + idx + ')" ' +
+        'style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px" ' +
+        'onmouseover="this.style.background=\'#f0f4f8\'" onmouseout="this.style.background=\'\'">' +
         '<span style="font-weight:600;font-family:monospace;color:#1e3a5f;min-width:70px">' + sym + '</span>' +
-        '<span style="flex:1;font-size:13px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + nm + '</span>' +
-        '<span style="font-size:11px;color:#888;white-space:nowrap">' + ex + ' · ' + tp + '</span>' +
+        '<span style="flex:1;font-size:13px;color:#333;overflow:hidden;text-overflow:ellipsis">' + nm + '</span>' +
+        '<span style="font-size:11px;color:#888;white-space:nowrap">' + ex + ' &middot; ' + tp + '</span>' +
         '</div>';
     }}).join("");
     dd.style.display = "block";
@@ -625,7 +625,12 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (dd) dd.style.display = "none";
   }}
 
-  function addFromSearch(symbol, name, type) {{
+  function addFromSearch(idx) {{
+    var item = _searchResults[idx];
+    if (!item) return;
+    var symbol = (item.symbol || "").toUpperCase();
+    var name   = item.shortname || item.longname || symbol;
+    var type   = guessType(item);
     hideDropdown();
     document.getElementById("stock-search").value = "";
     document.getElementById("search-status").textContent = "";
