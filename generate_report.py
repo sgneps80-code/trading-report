@@ -552,8 +552,11 @@ def portfolio_rows(portfolio, analysis_map):
             <td>{p['rsi'] if p.get('rsi') else 'n.d.'}</td>
             <td style="color:{trend_color};font-weight:600;font-size:12px">{trend}</td>
             <td>{pct(p.get('perf_1m'))}</td>
+            <td>{pct(p.get('perf_3m'))}</td>
             <td>{candle_badge(p.get('candle_d','—'))}</td>
+            <td>{candle_badge(p.get('candle_w','—'))}</td>
             <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
+            <td>{rec_badge(p.get('rec_str','Neutro'))}</td>
             <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -902,43 +905,70 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     }}
   }}
 
-  async function searchTradingView(q) {{
-    var url = "https://symbol-search.tradingview.com/symbol_search/v3/?text=" +
-              encodeURIComponent(q) + "&hl=1&exchange=&lang=en&search_type=undefined&domain=production&sort_by_country=IT";
+  async function fetchJSON(url, timeoutMs) {{
     var r = await Promise.race([
       fetch(url),
-      new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("timeout")); }}, 6000); }})
+      new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("timeout")); }}, timeoutMs || 5000); }})
     ]);
-    if (!r.ok) return [];
-    var data = await r.json();
-    var symbols = data.symbols || (Array.isArray(data) ? data : []);
-    return symbols.slice(0, 15).map(function(s) {{
-      var exch = s.exchange || s.listed_exchange || "";
-      var yfsym = tvToYahoo(s.symbol || "", exch);
-      var tp = (s.type === "fund" || s.type === "dr" || s.type === "structured") ? "ETF" : "Azione";
-      return {{symbol: yfsym, shortname: s.description || s.symbol, exchDisp: exch, quoteType: tp === "ETF" ? "ETF" : "EQUITY"}};
-    }}).filter(function(s) {{ return s.symbol.length > 0; }});
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  }}
+
+  async function searchTradingView(q) {{
+    var enc = encodeURIComponent(q);
+    // Endpoint TV — senza sort_by_country per risultati globali
+    var tvUrl = "https://symbol-search.tradingview.com/symbol_search/v3/?text=" +
+                enc + "&hl=1&exchange=&lang=en&search_type=undefined&domain=production";
+    var tvUrlOld = "https://symbol-search.tradingview.com/symbol_search/?text=" +
+                   enc + "&exchange=&lang=en&type=&domain=production";
+
+    // Tentativi: diretto, proxy corsproxy, proxy allorigins (raw)
+    var attempts = [
+      tvUrl,
+      "https://corsproxy.io/?" + encodeURIComponent(tvUrl),
+      "https://api.allorigins.win/raw?url=" + encodeURIComponent(tvUrl),
+      tvUrlOld,
+      "https://corsproxy.io/?" + encodeURIComponent(tvUrlOld)
+    ];
+
+    function parseTV(data) {{
+      // allorigins/get wrap
+      if (data && data.contents) {{ try {{ data = JSON.parse(data.contents); }} catch(e) {{}} }}
+      var symbols = data && data.symbols ? data.symbols : (Array.isArray(data) ? data : []);
+      return symbols.slice(0, 15).map(function(s) {{
+        var exch = s.exchange || s.listed_exchange || "";
+        var yfsym = tvToYahoo(s.symbol || "", exch);
+        var tp = (s.type === "fund" || s.type === "dr" || s.type === "structured") ? "ETF" : "Azione";
+        return {{symbol: yfsym, shortname: s.description || s.symbol, exchDisp: exch,
+                 quoteType: tp === "ETF" ? "ETF" : "EQUITY"}};
+      }}).filter(function(s) {{ return s.symbol && s.symbol.length > 0; }});
+    }}
+
+    for (var i = 0; i < attempts.length; i++) {{
+      try {{
+        var data = await fetchJSON(attempts[i], 5000);
+        var results = parseTV(data);
+        if (results.length > 0) return results;
+      }} catch(e) {{ /* continua */ }}
+    }}
+    return [];
   }}
 
   async function searchYahoo(q) {{
-    var qs = encodeURIComponent(q);
-    var yf = "https://query1.finance.yahoo.com/v1/finance/search?q=" + qs + "&lang=en-US&region=US&quotesCount=10&newsCount=0";
+    var yf = "https://query1.finance.yahoo.com/v1/finance/search?q=" +
+             encodeURIComponent(q) + "&lang=en-US&region=US&quotesCount=10&newsCount=0";
     var proxies = [
       {{url: "https://api.allorigins.win/raw?url=" + encodeURIComponent(yf), wrap: false}},
-      {{url: "https://api.allorigins.win/get?url=" + encodeURIComponent(yf), wrap: true}},
-      {{url: "https://corsproxy.io/?" + yf, wrap: false}}
+      {{url: "https://corsproxy.io/?" + encodeURIComponent(yf), wrap: false}},
+      {{url: "https://api.allorigins.win/get?url=" + encodeURIComponent(yf), wrap: true}}
     ];
     for (var i = 0; i < proxies.length; i++) {{
       try {{
         var p = proxies[i];
-        var r = await Promise.race([
-          fetch(p.url),
-          new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("t")); }}, 5000); }})
-        ]);
-        if (!r.ok) continue;
-        var data = await r.json();
+        var data = await fetchJSON(p.url, 5000);
         if (p.wrap && data.contents) data = JSON.parse(data.contents);
-        var quotes = (data.finance && data.finance.result && data.finance.result[0] && data.finance.result[0].quotes) || [];
+        var quotes = (data.finance && data.finance.result &&
+                      data.finance.result[0] && data.finance.result[0].quotes) || [];
         if (quotes.length) return quotes;
       }} catch(e) {{ continue; }}
     }}
@@ -1174,7 +1204,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <h2>💼 Portafoglio — Analisi Tecnica</h2>
     <table>
       <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>Candela 1D</th><th>MACD</th><th>Segnale</th><th>Analisi</th>
+        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>TV Rec.</th><th>Segnale</th><th>Analisi</th>
       </tr></thead>
       <tbody>{portfolio_rows(portfolio, pm)}</tbody>
     </table>
