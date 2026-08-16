@@ -501,35 +501,34 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   }}
 
   function renderEditorTable() {{
-    document.getElementById("editor-tbody").innerHTML = editorPortfolio.map((item, i) => `
-      <tr style="border-bottom:1px solid #e2e8f0">
-        <td style="padding:8px 4px">
-          <input value="${{item.symbol}}" onchange="updateItem(${{i}},'symbol',this.value.toUpperCase().trim())"
-            style="width:100px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px;font-family:monospace">
-        </td>
-        <td style="padding:8px 4px">
-          <input value="${{item.name}}" onchange="updateItem(${{i}},'name',this.value)"
-            style="width:170px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-        </td>
-        <td style="padding:8px 4px">
-          <select onchange="updateItem(${{i}},'type',this.value)"
-            style="padding:6px;border:1px solid #ddd;border-radius:4px;font-size:13px">
-            <option ${{item.type==='Azione'?'selected':''}}>Azione</option>
-            <option ${{item.type==='ETF'?'selected':''}}>ETF</option>
-            <option ${{item.type==='Leveraged ETF'?'selected':''}}>Leveraged ETF</option>
-            <option ${{item.type==='ETF Commodity'?'selected':''}}>ETF Commodity</option>
-          </select>
-        </td>
-        <td style="padding:8px 4px;text-align:center">
-          <button onclick="removeItem(${{i}})" title="Rimuovi"
-            style="color:#dc2626;background:none;border:none;cursor:pointer;font-size:20px;line-height:1;padding:2px">×</button>
-        </td>
-      </tr>`).join("");
+    document.getElementById("editor-tbody").innerHTML = editorPortfolio.map(function(item, i) {{
+      return '<tr style="border-bottom:1px solid #e2e8f0">' +
+        '<td style="padding:8px 6px;width:36px;text-align:center">' +
+          '<input type="checkbox" class="row-cb" data-i="' + i + '" style="width:16px;height:16px;cursor:pointer">' +
+        '</td>' +
+        '<td style="padding:8px 6px;font-family:monospace;font-size:13px;font-weight:600;color:#1e3a5f">' + item.symbol + '</td>' +
+        '<td style="padding:8px 6px;font-size:13px">' + item.name + '</td>' +
+        '<td style="padding:8px 6px;font-size:12px;color:#666">' + (item.type || 'Azione') + '</td>' +
+        '<td style="padding:8px 6px;text-align:center">' +
+          '<button onclick="removeItem(' + i + ')" title="Rimuovi" ' +
+            'style="color:#dc2626;background:none;border:none;cursor:pointer;font-size:20px;line-height:1;padding:2px">×</button>' +
+        '</td>' +
+        '</tr>';
+    }}).join("");
   }}
 
-  function updateItem(i, field, value) {{
-    editorPortfolio[i][field] = value;
+  function toggleAll(cb) {{
+    document.querySelectorAll(".row-cb").forEach(function(c) {{ c.checked = cb.checked; }});
+  }}
+
+  function deleteSelected() {{
+    var toDelete = new Set([].slice.call(document.querySelectorAll(".row-cb:checked")).map(function(c) {{ return +c.dataset.i; }}));
+    if (!toDelete.size) {{ setStatus("⚠️ Nessun titolo selezionato", "#d97706", 3000); return; }}
+    editorPortfolio = editorPortfolio.filter(function(_, i) {{ return !toDelete.has(i); }});
     localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
+    var allCb = document.getElementById("check-all");
+    if (allCb) allCb.checked = false;
+    renderEditorTable();
   }}
 
   function removeItem(i) {{
@@ -538,13 +537,123 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     renderEditorTable();
   }}
 
-  function addEditorRow() {{
-    editorPortfolio.push({{symbol:"",name:"",type:"Azione"}});
+  // ─── Ricerca Yahoo Finance ─────────────────────────────────────────────────
+  var EXCHANGE_MAP = {{
+    "BIT":"IT","MIL":"IT","TLX":"IT","BER":"DE","FRA":"DE","HAM":"DE","STU":"DE","MUN":"DE","DUS":"DE",
+    "PAR":"FR","EPA":"FR","AMS":"NL","LSE":"GB","LON":"GB","STO":"SE","CPH":"DK","HEL":"FI","OSL":"NO",
+    "MCE":"ES","VIE":"AT","ZRH":"CH","NasdaqGS":"US","NasdaqCM":"US","NYQ":"US","NYSE":"US","NASDAQ":"US",
+    "ASX":"AU","TSX":"CA","HKG":"HK","JPX":"JP","SGX":"SG","KSE":"KR"
+  }};
+
+  function guessType(quote) {{
+    var qt = (quote.quoteType || "").toUpperCase();
+    if (qt === "ETF" || qt === "MUTUALFUND") return "ETF";
+    return "Azione";
+  }}
+
+  var _searchTimer = null;
+  function onSearchInput() {{
+    clearTimeout(_searchTimer);
+    var q = document.getElementById("stock-search").value.trim();
+    if (!q) {{ hideDropdown(); return; }}
+    _searchTimer = setTimeout(function() {{ doSearch(q); }}, 350);
+  }}
+
+  async function doSearch(q) {{
+    document.getElementById("search-status").textContent = "🔍 Ricerca...";
+    document.getElementById("manual-add").style.display = "none";
+    try {{
+      var results = await searchStocks(q);
+      if (results && results.length) {{
+        showDropdown(results);
+        document.getElementById("search-status").textContent = "";
+      }} else {{
+        hideDropdown();
+        document.getElementById("search-status").textContent = "Nessun risultato. Puoi comunque aggiungere il ticker manualmente.";
+        document.getElementById("manual-add").style.display = "inline-block";
+      }}
+    }} catch(e) {{
+      hideDropdown();
+      document.getElementById("search-status").textContent = "Errore di rete. Aggiungi il ticker manualmente.";
+      document.getElementById("manual-add").style.display = "inline-block";
+    }}
+  }}
+
+  async function searchStocks(q) {{
+    var qs = encodeURIComponent(q);
+    var base = "https://query2.finance.yahoo.com/v1/finance/search?q=" + qs + "&lang=it-IT&region=IT&quotesCount=10&newsCount=0&enableFuzzyQuery=false";
+    var endpoints = [
+      base,
+      "https://corsproxy.io/?" + encodeURIComponent(base),
+      "https://api.allorigins.win/get?url=" + encodeURIComponent(base)
+    ];
+    for (var idx = 0; idx < endpoints.length; idx++) {{
+      try {{
+        var r = await fetch(endpoints[idx], {{signal: AbortSignal.timeout(5000)}});
+        if (!r.ok) continue;
+        var data = await r.json();
+        if (data.contents) data = JSON.parse(data.contents);
+        var quotes = (data.finance && data.finance.result && data.finance.result[0] && data.finance.result[0].quotes) || [];
+        if (quotes.length) return quotes;
+      }} catch(e) {{ continue; }}
+    }}
+    return [];
+  }}
+
+  function showDropdown(results) {{
+    var dd = document.getElementById("search-dropdown");
+    dd.innerHTML = results.slice(0, 10).map(function(q) {{
+      var sym = q.symbol || "";
+      var nm  = q.shortname || q.longname || sym;
+      var ex  = q.exchDisp || q.exchange || "";
+      var tp  = guessType(q);
+      var symE = sym.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+      var nmE  = nm.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+      return '<div onmousedown="addFromSearch(\'' + symE + "','" + nmE + "','" + tp + "')" +
+        ' style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px"' +
+        ' onmouseover="this.style.background=\'#f0f4f8\'" onmouseout="this.style.background=\'\'">' +
+        '<span style="font-weight:600;font-family:monospace;color:#1e3a5f;min-width:70px">' + sym + '</span>' +
+        '<span style="flex:1;font-size:13px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + nm + '</span>' +
+        '<span style="font-size:11px;color:#888;white-space:nowrap">' + ex + ' · ' + tp + '</span>' +
+        '</div>';
+    }}).join("");
+    dd.style.display = "block";
+  }}
+
+  function hideDropdown() {{
+    var dd = document.getElementById("search-dropdown");
+    if (dd) dd.style.display = "none";
+  }}
+
+  function addFromSearch(symbol, name, type) {{
+    hideDropdown();
+    document.getElementById("stock-search").value = "";
+    document.getElementById("search-status").textContent = "";
+    document.getElementById("manual-add").style.display = "none";
+    if (editorPortfolio.some(function(p) {{ return p.symbol === symbol; }})) {{
+      setStatus("⚠️ " + symbol + " già presente nel portafoglio", "#d97706", 3000);
+      return;
+    }}
+    editorPortfolio.push({{symbol: symbol, name: name, type: type}});
+    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
     renderEditorTable();
-    setTimeout(() => {{
-      const inputs = document.querySelectorAll("#editor-tbody input");
-      if (inputs.length >= 2) inputs[inputs.length - 2].focus();
-    }}, 50);
+    setStatus("✅ " + symbol + " aggiunto", "#16a34a", 3000);
+  }}
+
+  function addManualTicker() {{
+    var sym = document.getElementById("stock-search").value.trim().toUpperCase();
+    if (!sym) {{ setStatus("⚠️ Inserisci un ticker", "#d97706", 3000); return; }}
+    if (editorPortfolio.some(function(p) {{ return p.symbol === sym; }})) {{
+      setStatus("⚠️ " + sym + " già presente nel portafoglio", "#d97706", 3000);
+      return;
+    }}
+    editorPortfolio.push({{symbol: sym, name: sym, type: "Azione"}});
+    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
+    renderEditorTable();
+    document.getElementById("stock-search").value = "";
+    document.getElementById("manual-add").style.display = "none";
+    document.getElementById("search-status").textContent = "";
+    setStatus("✅ " + sym + " aggiunto", "#16a34a", 3000);
   }}
 
   function showGhConfig() {{
@@ -753,10 +862,15 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <div id="gh-config-saved" style="display:none;font-size:13px;color:#555;margin-bottom:12px">
       Impostazioni GitHub caricate. <a href="#" onclick="showGhConfig();return false" style="color:#1e3a5f">Modifica</a>
     </div>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+
+    <!-- Tabella portafoglio con checkbox -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
       <thead>
         <tr style="background:#1e3a5f;color:white">
-          <th style="padding:10px;text-align:left;font-size:12px">Simbolo Yahoo Finance</th>
+          <th style="padding:10px 6px;width:36px;text-align:center">
+            <input type="checkbox" id="check-all" onchange="toggleAll(this)" style="width:16px;height:16px;cursor:pointer">
+          </th>
+          <th style="padding:10px;text-align:left;font-size:12px">Simbolo</th>
           <th style="padding:10px;text-align:left;font-size:12px">Nome</th>
           <th style="padding:10px;text-align:left;font-size:12px">Tipo</th>
           <th style="padding:10px;width:36px"></th>
@@ -764,11 +878,37 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       </thead>
       <tbody id="editor-tbody"></tbody>
     </table>
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px">
-      <button onclick="addEditorRow()"
-        style="background:#e2e8f0;color:#1e3a5f;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px">
-        + Aggiungi titolo
+    <div style="margin-bottom:16px">
+      <button onclick="deleteSelected()"
+        style="background:#dc2626;color:white;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600">
+        🗑 Elimina selezionati
       </button>
+    </div>
+
+    <!-- Ricerca e aggiunta titoli -->
+    <div style="margin-bottom:16px">
+      <label style="font-size:12px;color:#666;display:block;margin-bottom:6px;font-weight:600">Aggiungi titolo</label>
+      <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
+        <div style="position:relative;flex:1;min-width:220px">
+          <input id="stock-search" type="text"
+            placeholder="Cerca per nome o ticker (es. ENI, Apple, VWCE)..."
+            oninput="onSearchInput()" onblur="setTimeout(hideDropdown,200)"
+            style="width:100%;padding:9px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px">
+          <div id="search-dropdown"
+            style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #ddd;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:100;max-height:300px;overflow-y:auto;margin-top:2px">
+          </div>
+        </div>
+        <div id="manual-add" style="display:none">
+          <button onclick="addManualTicker()"
+            style="background:#1e3a5f;color:white;border:none;padding:9px 14px;border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap">
+            ➕ Aggiungi come ticker
+          </button>
+        </div>
+      </div>
+      <div id="search-status" style="font-size:12px;color:#888;margin-top:6px"></div>
+    </div>
+
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
       <button onclick="triggerReport(this)"
         style="background:#16a34a;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
         🚀 Aggiorna Report
