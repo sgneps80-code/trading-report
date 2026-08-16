@@ -1,3 +1,4 @@
+
 #!/usr/bin/env python3
 """
 Trading Report Generator — GitHub Pages Edition
@@ -652,6 +653,23 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   .sintesi {{ background: #fffbeb; border-left: 4px solid #d97706; padding: 14px 18px; border-radius: 0 8px 8px 0; margin-top: 16px; font-size: 14px; line-height: 1.6; }}
   .disclaimer {{ font-size: 11px; color: #999; line-height: 1.6; margin-top: 8px; }}
   .gen-time {{ font-size: 12px; color: #aaa; text-align: right; margin-top: 8px; }}
+  .gh-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }}
+  @media (max-width: 768px) {{
+    .header {{ padding: 20px 16px; }}
+    .header h1 {{ font-size: 20px; }}
+    .header p {{ font-size: 12px; }}
+    .container {{ padding: 12px 8px; }}
+    .section {{ padding: 16px 12px; overflow-x: auto; }}
+    .section h2 {{ font-size: 15px; }}
+    th {{ padding: 7px 6px; font-size: 11px; }}
+    td {{ padding: 7px 6px; font-size: 12px; }}
+    table {{ font-size: 12px; min-width: 600px; }}
+    .idx-grid {{ gap: 8px; }}
+    .idx-card {{ min-width: 90px; padding: 10px 12px; }}
+    .idx-val {{ font-size: 15px; }}
+    .sintesi {{ font-size: 13px; }}
+    .gh-grid {{ grid-template-columns: 1fr; }}
+  }}
 </style>
 </head>
 <body>
@@ -726,7 +744,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <h2>🔧 Aggiorna Portafoglio</h2>
     <div id="gh-config" style="background:#f0f4f8;border-radius:8px;padding:16px;margin-bottom:16px">
       <p style="font-size:13px;color:#555;margin-bottom:12px">Inserisci una volta le credenziali GitHub — vengono salvate nel browser.</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div class="gh-grid">
         <div>
           <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">GitHub Username</label>
           <input id="gh-owner" type="text" placeholder="es. miouser"
