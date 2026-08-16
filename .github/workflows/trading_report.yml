@@ -5,6 +5,11 @@ on:
     # 10:30 ora italiana estiva (CEST = UTC+2) → 08:30 UTC
     - cron: '30 8 * * 1-5'
   workflow_dispatch:
+    inputs:
+      portfolio_json:
+        description: 'Portfolio JSON aggiornato (lascia vuoto per run schedulato)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -30,8 +35,16 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PORTFOLIO_JSON: ${{ secrets.PORTFOLIO_JSON }}
+          PORTFOLIO_INPUT: ${{ inputs.portfolio_json }}
           SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
         run: python generate_report.py
+
+      - name: Salva portafoglio aggiornato come secret
+        if: ${{ inputs.portfolio_json != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          NEW_PORTFOLIO: ${{ inputs.portfolio_json }}
+        run: echo "$NEW_PORTFOLIO" | gh secret set PORTFOLIO_JSON
 
       - name: Commit and push report
         run: |
