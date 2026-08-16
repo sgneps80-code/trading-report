@@ -487,7 +487,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 
   function initEditor() {{
     const saved = localStorage.getItem("editor_portfolio");
-    editorPortfolio = saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(PORTFOLIO_BASE));
+    const parsed = saved ? JSON.parse(saved) : null;
+    editorPortfolio = (parsed && parsed.length > 0) ? parsed : JSON.parse(JSON.stringify(PORTFOLIO_BASE));
+    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
     renderEditorTable();
     const owner = localStorage.getItem("gh_owner") || "";
     const repo  = localStorage.getItem("gh_repo")  || "";
@@ -537,18 +539,141 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     renderEditorTable();
   }}
 
-  // ─── Ricerca Yahoo Finance ─────────────────────────────────────────────────
-  var EXCHANGE_MAP = {{
-    "BIT":"IT","MIL":"IT","TLX":"IT","BER":"DE","FRA":"DE","HAM":"DE","STU":"DE","MUN":"DE","DUS":"DE",
-    "PAR":"FR","EPA":"FR","AMS":"NL","LSE":"GB","LON":"GB","STO":"SE","CPH":"DK","HEL":"FI","OSL":"NO",
-    "MCE":"ES","VIE":"AT","ZRH":"CH","NasdaqGS":"US","NasdaqCM":"US","NYQ":"US","NYSE":"US","NASDAQ":"US",
-    "ASX":"AU","TSX":"CA","HKG":"HK","JPX":"JP","SGX":"SG","KSE":"KR"
-  }};
+  // ─── Ricerca titoli ───────────────────────────────────────────────────────
+  var STATIC_STOCKS = [
+    // ── Italiani (Borsa Milano) ──
+    {{symbol:"ENI.MI",shortname:"ENI",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"ENEL.MI",shortname:"Enel",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"ISP.MI",shortname:"Intesa Sanpaolo",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"UCG.MI",shortname:"UniCredit",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"STLAM.MI",shortname:"Stellantis",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"MB.MI",shortname:"Mediobanca",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"G.MI",shortname:"Generali",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"LDO.MI",shortname:"Leonardo",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"RACE.MI",shortname:"Ferrari",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"MONC.MI",shortname:"Moncler",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"PRY.MI",shortname:"Prysmian",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"BAMI.MI",shortname:"Banco BPM",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"BPSO.MI",shortname:"BPER Banca",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"BMPS.MI",shortname:"Banca Monte dei Paschi",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"TIT.MI",shortname:"Telecom Italia",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"SRG.MI",shortname:"Snam",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"TRN.MI",shortname:"Terna",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"A2A.MI",shortname:"A2A",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"HER.MI",shortname:"Hera",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"CPR.MI",shortname:"Campari",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"NEXI.MI",shortname:"Nexi",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"FBK.MI",shortname:"FinecoBank",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"AMP.MI",shortname:"Amplifon",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"AZM.MI",shortname:"Azimut",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"POSTE.MI",shortname:"Poste Italiane",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"SPM.MI",shortname:"Saipem",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"STS.MI",shortname:"STMicroelectronics",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"INWT.MI",shortname:"Inwit",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"PIRC.MI",shortname:"Pirelli",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"IVECO.MI",shortname:"Iveco Group",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"MFEA.MI",shortname:"MFE-MediaForEurope",exchDisp:"MIL",quoteType:"EQUITY"}},
+    {{symbol:"REC.MI",shortname:"Recordati",exchDisp:"MIL",quoteType:"EQUITY"}},
+    // ── Francesi (Euronext Paris) ──
+    {{symbol:"MC.PA",shortname:"LVMH",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"OR.PA",shortname:"L'Oreal",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"TTE.PA",shortname:"TotalEnergies",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"BNP.PA",shortname:"BNP Paribas",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"AI.PA",shortname:"Air Liquide",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"SAN.PA",shortname:"Sanofi",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"SAF.PA",shortname:"Safran",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"SU.PA",shortname:"Schneider Electric",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"GLE.PA",shortname:"Societe Generale",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"CS.PA",shortname:"AXA",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"RMS.PA",shortname:"Hermes",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"KER.PA",shortname:"Kering",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"DG.PA",shortname:"Vinci",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"CAP.PA",shortname:"Capgemini",exchDisp:"EPA",quoteType:"EQUITY"}},
+    {{symbol:"DSY.PA",shortname:"Dassault Systemes",exchDisp:"EPA",quoteType:"EQUITY"}},
+    // ── Tedeschi (Xetra) ──
+    {{symbol:"SAP.DE",shortname:"SAP",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"SIE.DE",shortname:"Siemens",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"ALV.DE",shortname:"Allianz",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"MUV2.DE",shortname:"Munich Re",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"BAS.DE",shortname:"BASF",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"BMW.DE",shortname:"BMW",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"VOW3.DE",shortname:"Volkswagen",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"DBK.DE",shortname:"Deutsche Bank",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"MBG.DE",shortname:"Mercedes-Benz",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"BAYN.DE",shortname:"Bayer",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"ADS.DE",shortname:"Adidas",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    {{symbol:"RHM.DE",shortname:"Rheinmetall",exchDisp:"XETRA",quoteType:"EQUITY"}},
+    // ── USA ──
+    {{symbol:"AAPL",shortname:"Apple",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"MSFT",shortname:"Microsoft",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"GOOGL",shortname:"Alphabet (Google)",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"AMZN",shortname:"Amazon",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"META",shortname:"Meta Platforms",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"NVDA",shortname:"NVIDIA",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"TSLA",shortname:"Tesla",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"JPM",shortname:"JPMorgan Chase",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"V",shortname:"Visa",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"JNJ",shortname:"Johnson & Johnson",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"WMT",shortname:"Walmart",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"PG",shortname:"Procter & Gamble",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"BAC",shortname:"Bank of America",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"MA",shortname:"Mastercard",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"XOM",shortname:"Exxon Mobil",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"KO",shortname:"Coca-Cola",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"LLY",shortname:"Eli Lilly",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"AVGO",shortname:"Broadcom",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"COST",shortname:"Costco",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"NFLX",shortname:"Netflix",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"PANW",shortname:"Palo Alto Networks",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"CRM",shortname:"Salesforce",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"AMD",shortname:"AMD",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"INTC",shortname:"Intel",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"QCOM",shortname:"Qualcomm",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"GS",shortname:"Goldman Sachs",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"MS",shortname:"Morgan Stanley",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"CVX",shortname:"Chevron",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"LMT",shortname:"Lockheed Martin",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"RTX",shortname:"RTX (Raytheon)",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"BA",shortname:"Boeing",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"GE",shortname:"GE Aerospace",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"CAT",shortname:"Caterpillar",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"HON",shortname:"Honeywell",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
+    {{symbol:"DIS",shortname:"Disney",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    {{symbol:"NKE",shortname:"Nike",exchDisp:"NYSE",quoteType:"EQUITY"}},
+    // ── ETF ──
+    {{symbol:"VWCE.DE",shortname:"Vanguard FTSE All-World",exchDisp:"XETRA",quoteType:"ETF"}},
+    {{symbol:"IWDA.AS",shortname:"iShares MSCI World",exchDisp:"AMS",quoteType:"ETF"}},
+    {{symbol:"SWDA.MI",shortname:"iShares Core MSCI World",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"CSPX.MI",shortname:"iShares Core S&P 500",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"EIMI.MI",shortname:"iShares MSCI EM IMI",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"VEUR.AS",shortname:"Vanguard FTSE Developed Europe",exchDisp:"AMS",quoteType:"ETF"}},
+    {{symbol:"XWLD.MI",shortname:"Xtrackers MSCI World Swap",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"EXSA.DE",shortname:"iShares Euro Stoxx 50",exchDisp:"XETRA",quoteType:"ETF"}},
+    {{symbol:"AGGH.MI",shortname:"iShares Core Global Aggregate Bond",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"SGLD.MI",shortname:"Invesco Physical Gold ETC",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"PHAU.MI",shortname:"WisdomTree Physical Gold",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"GLD",shortname:"SPDR Gold Shares",exchDisp:"NYSE",quoteType:"ETF"}},
+    {{symbol:"SPY",shortname:"SPDR S&P 500 ETF",exchDisp:"NYSE",quoteType:"ETF"}},
+    {{symbol:"QQQ",shortname:"Invesco QQQ Trust",exchDisp:"NASDAQ",quoteType:"ETF"}},
+    {{symbol:"VTI",shortname:"Vanguard Total Stock Market",exchDisp:"NYSE",quoteType:"ETF"}},
+    {{symbol:"XAR.MI",shortname:"SPDR S&P Aerospace & Defense",exchDisp:"MIL",quoteType:"ETF"}},
+    {{symbol:"L8I7.DE",shortname:"iShares Global Clean Energy",exchDisp:"XETRA",quoteType:"ETF"}},
+    {{symbol:"IQQH.DE",shortname:"iShares Global Water",exchDisp:"XETRA",quoteType:"ETF"}},
+    {{symbol:"QDVE.DE",shortname:"iShares S&P 500 IT Sector",exchDisp:"XETRA",quoteType:"ETF"}}
+  ];
 
   function guessType(quote) {{
     var qt = (quote.quoteType || "").toUpperCase();
     if (qt === "ETF" || qt === "MUTUALFUND") return "ETF";
     return "Azione";
+  }}
+
+  function searchLocal(q) {{
+    var ql = q.toLowerCase();
+    return STATIC_STOCKS.filter(function(s) {{
+      return s.symbol.toLowerCase().indexOf(ql) >= 0 ||
+             s.shortname.toLowerCase().indexOf(ql) >= 0;
+    }}).slice(0, 8);
   }}
 
   var _searchResults = [];
@@ -557,43 +682,56 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     clearTimeout(_searchTimer);
     var q = document.getElementById("stock-search").value.trim();
     if (!q) {{ hideDropdown(); return; }}
-    _searchTimer = setTimeout(function() {{ doSearch(q); }}, 350);
+    _searchTimer = setTimeout(function() {{ doSearch(q); }}, 300);
   }}
 
   async function doSearch(q) {{
-    document.getElementById("search-status").textContent = "🔍 Ricerca...";
-    document.getElementById("manual-add").style.display = "none";
+    var local = searchLocal(q);
+    if (local.length > 0) {{
+      showDropdown(local);
+      document.getElementById("search-status").textContent = "";
+      document.getElementById("manual-add").style.display = "none";
+    }} else {{
+      document.getElementById("search-status").textContent = "🔍 Ricerca online...";
+    }}
     try {{
-      var results = await searchStocks(q);
-      if (results && results.length) {{
-        showDropdown(results);
+      var online = await searchYahoo(q);
+      if (online.length > 0) {{
+        showDropdown(online);
         document.getElementById("search-status").textContent = "";
-      }} else {{
+        document.getElementById("manual-add").style.display = "none";
+      }} else if (local.length === 0) {{
         hideDropdown();
-        document.getElementById("search-status").textContent = "Nessun risultato. Puoi comunque aggiungere il ticker manualmente.";
+        document.getElementById("search-status").textContent = "Nessun risultato. Aggiungi il ticker manualmente.";
         document.getElementById("manual-add").style.display = "inline-block";
       }}
     }} catch(e) {{
-      hideDropdown();
-      document.getElementById("search-status").textContent = "Errore di rete. Aggiungi il ticker manualmente.";
-      document.getElementById("manual-add").style.display = "inline-block";
+      if (local.length === 0) {{
+        hideDropdown();
+        document.getElementById("search-status").textContent = "Nessun risultato. Aggiungi il ticker manualmente.";
+        document.getElementById("manual-add").style.display = "inline-block";
+      }}
     }}
   }}
 
-  async function searchStocks(q) {{
+  async function searchYahoo(q) {{
     var qs = encodeURIComponent(q);
-    var base = "https://query2.finance.yahoo.com/v1/finance/search?q=" + qs + "&lang=it-IT&region=IT&quotesCount=10&newsCount=0&enableFuzzyQuery=false";
-    var endpoints = [
-      base,
-      "https://corsproxy.io/?" + encodeURIComponent(base),
-      "https://api.allorigins.win/get?url=" + encodeURIComponent(base)
+    var yf = "https://query1.finance.yahoo.com/v1/finance/search?q=" + qs + "&lang=en-US&region=US&quotesCount=10&newsCount=0";
+    var proxies = [
+      {{url: "https://api.allorigins.win/raw?url=" + encodeURIComponent(yf), wrap: false}},
+      {{url: "https://api.allorigins.win/get?url=" + encodeURIComponent(yf), wrap: true}},
+      {{url: "https://corsproxy.io/?" + yf, wrap: false}}
     ];
-    for (var idx = 0; idx < endpoints.length; idx++) {{
+    for (var i = 0; i < proxies.length; i++) {{
       try {{
-        var r = await fetch(endpoints[idx], {{signal: AbortSignal.timeout(5000)}});
+        var p = proxies[i];
+        var r = await Promise.race([
+          fetch(p.url),
+          new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("timeout")); }}, 5000); }})
+        ]);
         if (!r.ok) continue;
         var data = await r.json();
-        if (data.contents) data = JSON.parse(data.contents);
+        if (p.wrap && data.contents) data = JSON.parse(data.contents);
         var quotes = (data.finance && data.finance.result && data.finance.result[0] && data.finance.result[0].quotes) || [];
         if (quotes.length) return quotes;
       }} catch(e) {{ continue; }}
