@@ -1,271 +1,373 @@
 #!/usr/bin/env python3
 """
-Trading Report Generator — GitHub Pages Edition
-Genera un report HTML giornaliero, lo cifra con Staticrypt e lo committa in docs/.
+Trading Report — TradingView Edition
+Screener:  scanner.tradingview.com  (Italia + USA, incluse small/mid cap)
+Analisi:   RSI + MACD + Trend EMA + Raccomandazione TV aggregata (26 indicatori)
+AI:        Anthropic Claude Haiku
 """
 
-import os
-import json
-import hashlib
-import logging
+import os, json, hashlib, logging
 from datetime import datetime
-import pandas as pd
-import yfinance as yf
+import requests
 import anthropic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Silenzia i log interni di yfinance (es. "possibly delisted", "no price data")
-logging.getLogger("yfinance").setLevel(logging.CRITICAL)
-logging.getLogger("peewee").setLevel(logging.CRITICAL)
-
-# ─── CONFIGURAZIONE ───────────────────────────────────────────────────────────
-
-# Il portafoglio è caricato da un GitHub Secret (PORTFOLIO_JSON) — non è nel codice.
-# Formato del secret: JSON array, es:
-# [{"symbol":"OMER.MI","name":"OMER","type":"Azione"}, ...]
+# ─── PORTFOLIO ────────────────────────────────────────────────────────────────
 _portfolio_input = os.environ.get("PORTFOLIO_INPUT", "").strip()
 if _portfolio_input:
     PORTFOLIO = json.loads(_portfolio_input)
-    logger.info("Portfolio caricato da input manuale (workflow_dispatch)")
+    logger.info("Portfolio caricato da workflow_dispatch")
 else:
     PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
     logger.info("Portfolio caricato da PORTFOLIO_JSON secret")
 
-STOCK_UNIVERSE_IT = [
-    # FTSE MIB — simboli Yahoo Finance verificati (formato TICKER.MI)
-    "ENI.MI",    # Eni
-    "ENEL.MI",   # Enel
-    "ISP.MI",    # Intesa Sanpaolo
-    "UCG.MI",    # UniCredit
-    "G.MI",      # Generali
-    "STM.MI",    # STMicroelectronics
-    "RACE.MI",   # Ferrari
-    "STLAM.MI",  # Stellantis
-    "MB.MI",     # Mediobanca
-    "BAMI.MI",   # Banco BPM
-    "LDO.MI",    # Leonardo
-    "PRY.MI",    # Prysmian
-    "MONC.MI",   # Moncler
-    "NEXI.MI",   # Nexi
-    "AMP.MI",    # Amplifon
-    "FBK.MI",    # FinecoBank
-    "TRN.MI",    # Terna
-    "SRG.MI",    # Snam
-    "A2A.MI",    # A2A
-    "INW.MI",    # Inwit
-    "CPR.MI",    # Campari
-    "PIRC.MI",   # Pirelli
-    "REC.MI",    # Recordati
-    "EXO.MI",    # Exor
-    "SPM.MI",    # Saipem
-    "ERG.MI",    # ERG
-    "DIA.MI",    # DiaSorin
-    "BMPS.MI",   # Banca Monte dei Paschi
-    "TIT.MI",    # Telecom Italia
-    "AZM.MI",    # Azimut
+# ─── TRADINGVIEW API ──────────────────────────────────────────────────────────
+TV_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Content-Type": "application/json",
+    "Referer": "https://www.tradingview.com/",
+    "Origin": "https://www.tradingview.com",
+}
+
+# Colonne richieste allo screener TradingView
+TV_COLS = [
+    "name",                     # ticker (es. ENI)
+    "description",              # nome azienda
+    "close",                    # prezzo corrente
+    "open",                     # apertura giornaliera (per candele 1D)
+    "high",                     # massimo giornaliero
+    "low",                      # minimo giornaliero
+    "change",                   # variazione giornaliera %
+    "volume",                   # volume
+    "average_volume_10d_calc",  # volume medio 10gg
+    "RSI",                      # RSI(14) giornaliero
+    "EMA20",                    # EMA 20
+    "EMA50",                    # EMA 50
+    "EMA200",                   # EMA 200
+    "MACD.macd",                # MACD line
+    "MACD.signal",              # MACD signal line
+    "MACD.hist",                # MACD histogram (conferma forza del segnale)
+    "change|1M",                # performance 1 mese %
+    "change|3M",                # performance 3 mesi %
+    "Rec.All",                  # raccomandazione aggregata TV: -1 vendi forte → +1 compra forte
+    "market_cap_basic",         # capitalizzazione di mercato
+    "open|1W",                  # apertura settimanale (per candele 1W)
+    "high|1W",                  # massimo settimanale
+    "low|1W",                   # minimo settimanale
+    "close|1W",                 # chiusura settimanale
 ]
 
-STOCK_UNIVERSE_US = [
-    "NVDA", "AMD", "MSFT", "AAPL", "GOOGL", "META", "AMZN", "AVGO", "TSM", "QCOM",
-    "CRM", "NOW", "PLTR", "PANW", "CRWD", "DDOG", "NET", "ARM", "MRVL",
-    "JPM", "GS", "V", "MA", "COIN",
-    "LLY", "ABBV", "UNH", "ISRG",
-    "XOM", "CVX", "CAT", "RTX", "GE", "LMT",
-    "TSLA", "COST", "ASML", "SAP",
-]
-
-ETF_UNIVERSE = [
-    "QQQ", "VGT", "FTEC", "IGV", "ARKW",
-    "SOXX", "SMH", "SOXQ",
-    "BOTZ", "ROBO", "IRBO", "THNQ",
-    "ICLN", "QCLN", "TAN",
-    "XLV", "IBB", "ARKG", "XBI",
-    "HACK", "BUG", "CIBR",
-    "ITA", "XAR",
-    "ARKK", "ARKF", "MOAT", "ARKQ",
-]
-
-# ─── ANALISI TECNICA ─────────────────────────────────────────────────────────
-
-def calculate_rsi_series(prices: pd.Series, period: int = 14) -> pd.Series:
-    delta = prices.diff().dropna()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    rs = gain.rolling(period).mean() / loss.rolling(period).mean().replace(0, float("inf"))
-    return 100 - (100 / (1 + rs))
-
-def ema(prices, period):
-    if len(prices) < period:
-        return None
-    return float(prices.ewm(span=period, adjust=False).mean().iloc[-1])
-
-def ema_series(prices, period):
-    return prices.ewm(span=period, adjust=False).mean()
-
-def vol_ratio(volume, period=20):
-    if len(volume) < period:
-        return None
-    avg = volume.rolling(period).mean().iloc[-1]
-    return round(float(volume.iloc[-1] / avg), 2) if avg > 0 else None
-
-def perf(prices, days):
-    if len(prices) < days:
-        return None
-    return round(float((prices.iloc[-1] / prices.iloc[-days] - 1) * 100), 1)
-
-def detect_candle(o, h, l, c):
-    """Rileva il pattern candela giapponese sull'ultima barra."""
+def detect_candle(o, h, l, c, prev_o=None, prev_c=None):
+    """Riconosce il pattern candela giapponese su OHLC scalare."""
     try:
-        lo, lh, ll, lc = float(o.iloc[-1]), float(h.iloc[-1]), float(l.iloc[-1]), float(c.iloc[-1])
-        rng = lh - ll
+        rng = h - l
         if rng < 1e-9:
             return "—"
-        body = abs(lc - lo)
-        upper = lh - max(lc, lo)
-        lower = min(lc, lo) - ll
+        body  = abs(c - o)
+        upper = h - max(c, o)
+        lower = min(c, o) - l
         body_r = body / rng
 
-        if body_r < 0.1:
+        if body_r < 0.08:
             return "Doji"
-        if lower > 2 * body and upper < body * 0.5 and lc > lo:
-            return "Hammer ▲"
-        if lower > 2 * body and upper < body * 0.5 and lc < lo:
-            return "Hanging Man ▼"
-        if upper > 2 * body and lower < body * 0.5 and lc < lo:
-            return "Shooting Star ▼"
-        if upper > 2 * body and lower < body * 0.5 and lc > lo:
-            return "Inv. Hammer ▲"
-        # Engulfing (confronta con candela precedente)
-        po, pc = float(o.iloc[-2]), float(c.iloc[-2])
-        if lc > lo and lc > pc and lo < po:
-            return "Bullish Engulfing ▲"
-        if lc < lo and lc < pc and lo > po:
-            return "Bearish Engulfing ▼"
-        if lc > lo and body_r > 0.6:
-            return "Bullish"
-        if lc < lo and body_r > 0.6:
-            return "Bearish"
+        if lower > 2 * body and upper < body:
+            return "Hammer ▲" if c >= o else "Hanging Man ▼"
+        if upper > 2 * body and lower < body:
+            return "Shooting Star ▼" if c < o else "Inv. Hammer ▲"
+        if prev_o is not None and prev_c is not None:
+            if c > o and c > prev_c and o < prev_o:
+                return "Bullish Engulfing ▲"
+            if c < o and c < prev_c and o > prev_o:
+                return "Bearish Engulfing ▼"
+        if body_r > 0.6:
+            return "Bullish" if c >= o else "Bearish"
         return "Neutro"
-    except:
+    except Exception:
         return "—"
 
-def get_data(symbol, private=False):
-    try:
-        hist = yf.Ticker(symbol).history(period="6mo")
-        if hist.empty or len(hist) < 60:
-            return None
-        o, h, l, c, v = hist["Open"], hist["High"], hist["Low"], hist["Close"], hist["Volume"]
+def tv_request(url, payload):
+    """Chiama la TV screener API con 3 tentativi."""
+    for attempt in range(3):
+        try:
+            r = requests.post(url, json=payload, headers=TV_HEADERS, timeout=25)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            logger.warning(f"TV request attempt {attempt+1}/3: {e}")
+            if attempt == 2:
+                raise
+    return {}
 
-        # RSI serie completa
-        rsi_series = calculate_rsi_series(c)
-        rsi_now = round(float(rsi_series.iloc[-1]), 1)
-        rsi_last5 = [round(float(x), 1) for x in rsi_series.iloc[-5:] if not pd.isna(x)]
+def parse_tv_row(row):
+    """Converte una riga dello screener TV nel formato interno."""
+    s    = row.get("s", "")       # "BVME:ENI"
+    vals = row.get("d", [])
+    d    = dict(zip(TV_COLS, vals))
 
-        # EMA serie per stabilità
-        ema20_s = ema_series(c, 20)
-        ema50_s = ema_series(c, 50)
+    ticker = s.split(":")[-1]     # "ENI"
+    price  = d.get("close") or 0
+    o_day  = d.get("open")  or 0
+    h_day  = d.get("high")  or 0
+    l_day  = d.get("low")   or 0
+    o_week = d.get("open|1W")  or 0
+    h_week = d.get("high|1W")  or 0
+    l_week = d.get("low|1W")   or 0
+    c_week = d.get("close|1W") or 0
+    ema20  = d.get("EMA20")  or 0
+    ema50  = d.get("EMA50")  or 0
+    ema200 = d.get("EMA200") or 0
+    rsi    = d.get("RSI")
+    macd   = d.get("MACD.macd")   or 0
+    sig    = d.get("MACD.signal") or 0
+    hist   = d.get("MACD.hist")   or (macd - sig)
+    p1m    = d.get("change|1M")
+    p3m    = d.get("change|3M")
+    rec    = d.get("Rec.All") or 0
+    vol    = d.get("volume")                 or 0
+    vol10d = d.get("average_volume_10d_calc") or 0
 
-        # Candela giornaliera
-        candle_d = detect_candle(o, h, l, c)
+    # ── Candele giapponesi ──
+    candle_d = detect_candle(o_day, h_day, l_day, price) if h_day and l_day else "—"
+    candle_w = detect_candle(o_week, h_week, l_week, c_week) if h_week and l_week else "—"
 
-        # Candela settimanale (resample)
-        weekly = hist.resample("W").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last"}).dropna()
-        candle_w = detect_candle(weekly["Open"], weekly["High"], weekly["Low"], weekly["Close"]) if len(weekly) >= 2 else "—"
+    # ── Trend rispetto alle EMA ──
+    if price and ema20 and ema50:
+        if price > ema20 > ema50:
+            trend = "Rialzista"
+            if ema200 and price > ema200:
+                trend = "Rialzista (>EMA200)"
+        elif price < ema20 < ema50:
+            trend = "Ribassista"
+        elif price > ema20:
+            trend = "Sopra EMA20"
+        else:
+            trend = "Laterale"
+    else:
+        trend = "n.d."
 
-        return {
-            "symbol": symbol,
-            "price": round(float(c.iloc[-1]), 2),
-            "rsi": rsi_now,
-            "rsi_last5": rsi_last5,
-            "ema20": float(ema20_s.iloc[-1]),
-            "ema20_last3": list(ema20_s.iloc[-3:].values),
-            "ema50": float(ema50_s.iloc[-1]),
-            "ema50_last3": list(ema50_s.iloc[-3:].values),
-            "close_last3": list(c.iloc[-3:].values),
-            "vol_ratio": vol_ratio(v),
-            "perf_1m": perf(c, 21),
-            "perf_3m": perf(c, 63),
-            "candle_d": candle_d,
-            "candle_w": candle_w,
-        }
-    except Exception as e:
-        label = "[portfolio item]" if private else symbol
-        logger.warning(f"Skip {label}: {type(e).__name__}")
-        return None
+    # ── MACD: nuovo indicatore di tendenza ──
+    # Histogram > 0 + MACD > Signal = momentum rialzista confermato
+    if hist > 0 and macd > sig:
+        macd_str = "↑ Rialzista"
+    elif hist < 0 and macd < sig:
+        macd_str = "↓ Ribassista"
+    elif hist > 0:
+        macd_str = "↑ In accelerazione"
+    else:
+        macd_str = "↓ In decelerazione"
 
-def passes(d, min_price=1.0):
-    """Filtro stabile: il titolo deve rispettare i criteri per almeno 3 giorni consecutivi."""
-    if not d or d["price"] < min_price:
-        return False
+    # ── Raccomandazione TV aggregata (26 indicatori) ──
+    if rec >= 0.5:
+        rec_str = "Compra Forte"
+    elif rec >= 0.1:
+        rec_str = "Compra"
+    elif rec <= -0.5:
+        rec_str = "Vendi Forte"
+    elif rec <= -0.1:
+        rec_str = "Vendi"
+    else:
+        rec_str = "Neutro"
 
-    # RSI: deve essere in [50,75] negli ultimi 3 giorni (stabilità segnale)
-    rsi5 = d.get("rsi_last5", [])
-    if len(rsi5) < 3 or sum(1 for r in rsi5[-3:] if 50 <= r <= 75) < 3:
-        return False
+    return {
+        "tv_symbol":  s,
+        "symbol":     ticker,
+        "yf_symbol":  ticker,   # aggiornato per portfolio
+        "name":       d.get("description") or ticker,
+        "price":      round(price, 2) if price else None,
+        "rsi":        round(rsi, 1)   if rsi   else None,
+        "ema20":      ema20,
+        "ema50":      ema50,
+        "ema200":     ema200,
+        "macd_str":   macd_str,
+        "candle_d":   candle_d,
+        "candle_w":   candle_w,
+        "perf_1m":    round(p1m, 1) if p1m is not None else None,
+        "perf_3m":    round(p3m, 1) if p3m is not None else None,
+        "trend":      trend,
+        "rec":        rec,
+        "rec_str":    rec_str,
+        "vol_ratio":  round(vol / vol10d, 2) if vol10d > 0 else None,
+        "market_cap": d.get("market_cap_basic"),
+    }
 
-    # Prezzo > EMA20 negli ultimi 3 giorni
-    closes = d.get("close_last3", [])
-    ema20s = d.get("ema20_last3", [])
-    if len(closes) < 3 or len(ema20s) < 3:
-        return False
-    if not all(c > e for c, e in zip(closes, ema20s)):
-        return False
-
-    # Prezzo > EMA50 oggi
-    if d["price"] < d["ema50"]:
-        return False
-
-    # Volume in crescita
-    if d["vol_ratio"] is None or d["vol_ratio"] < 1.0:
-        return False
-
-    return True
-
-def score(d):
+def momentum_score(d):
+    """Score composito per ordinare i risultati dello screener."""
     return (
-        (d["rsi"] - 50) * 0.5 +
-        (d.get("perf_1m") or 0) * 0.3 +
-        (d.get("perf_3m") or 0) * 0.2 +
-        ((d["vol_ratio"] or 1) - 1) * 5
+        (d.get("perf_1m") or 0) * 0.40 +
+        (d.get("perf_3m") or 0) * 0.25 +
+        ((d.get("rsi") or 50) - 50) * 0.15 +
+        (d.get("rec") or 0) * 12 +
+        ((d.get("vol_ratio") or 1) - 1) * 3
     )
 
-def screen(universe, label, min_price=1.0):
-    logger.info(f"Screening {label} ({len(universe)} candidati)...")
-    results = [d for sym in universe if (d := get_data(sym)) and passes(d, min_price)]
-    for d in results:
-        d["score"] = score(d)
-    results.sort(key=lambda x: x["score"], reverse=True)
-    logger.info(f"{label}: {len(results)} passati → top {min(10, len(results))}")
-    return results[:10]
+# ─── SCREENER ITALIA (tutte le capitalizzazioni) ──────────────────────────────
+def screen_italy():
+    logger.info("Screening Italia — TradingView (FTSE MIB + Mid + Small cap)...")
+    payload = {
+        "filter": [
+            {"left": "RSI",                     "operation": "in_range", "right": [48, 75]},
+            {"left": "close",                   "operation": "greater",  "right": "EMA20"},
+            {"left": "EMA20",                   "operation": "greater",  "right": "EMA50"},
+            {"left": "change|1M",               "operation": "greater",  "right": 0},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 20000},
+            {"left": "MACD.hist",               "operation": "greater",  "right": 0},
+        ],
+        "options": {"lang": "en"},
+        "markets": ["italy"],
+        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
+        "columns": TV_COLS,
+        "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
+        "range": [0, 80]
+    }
+    data = tv_request("https://scanner.tradingview.com/italy/scan", payload)
+    rows = [parse_tv_row(r) for r in (data.get("data") or [])]
+    rows = [r for r in rows if r["price"] and r["price"] > 0.2]
+    rows.sort(key=momentum_score, reverse=True)
+    logger.info(f"Italia: {len(rows)} titoli filtrati → top {min(10, len(rows))}")
+    return rows[:10]
 
-def get_portfolio():
+# ─── SCREENER USA (large + mid + small cap) ───────────────────────────────────
+def screen_usa():
+    logger.info("Screening USA — TradingView (tutte le cap)...")
+    payload = {
+        "filter": [
+            {"left": "RSI",                     "operation": "in_range", "right": [48, 75]},
+            {"left": "close",                   "operation": "greater",  "right": "EMA20"},
+            {"left": "EMA20",                   "operation": "greater",  "right": "EMA50"},
+            {"left": "change|1M",               "operation": "greater",  "right": 1},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 150000},
+            {"left": "market_cap_basic",        "operation": "greater",  "right": 100000000},
+            {"left": "MACD.hist",               "operation": "greater",  "right": 0},
+        ],
+        "options": {"lang": "en"},
+        "markets": ["america"],
+        "symbols": {"query": {"types": ["stock"]}, "tickers": []},
+        "columns": TV_COLS,
+        "sort": {"sortBy": "Rec.All", "sortOrder": "desc"},
+        "range": [0, 100]
+    }
+    data = tv_request("https://scanner.tradingview.com/america/scan", payload)
+    rows = [parse_tv_row(r) for r in (data.get("data") or [])]
+    rows = [r for r in rows if r["price"] and r["price"] > 1]
+    rows.sort(key=momentum_score, reverse=True)
+    logger.info(f"USA: {len(rows)} titoli filtrati → top {min(10, len(rows))}")
+    return rows[:10]
+
+# ─── SCREENER ETF ─────────────────────────────────────────────────────────────
+def screen_etfs():
+    logger.info("Screening ETF — TradingView...")
+    payload = {
+        "filter": [
+            {"left": "RSI",                     "operation": "in_range", "right": [48, 75]},
+            {"left": "close",                   "operation": "greater",  "right": "EMA20"},
+            {"left": "change|1M",               "operation": "greater",  "right": 1},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 15000},
+            {"left": "MACD.hist",               "operation": "greater",  "right": 0},
+        ],
+        "options": {"lang": "en"},
+        "markets": ["america", "italy", "germany"],
+        "symbols": {"query": {"types": ["fund", "dr"]}, "tickers": []},
+        "columns": TV_COLS,
+        "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
+        "range": [0, 50]
+    }
+    data = tv_request("https://scanner.tradingview.com/global/scan", payload)
+    rows = [parse_tv_row(r) for r in (data.get("data") or [])]
+    rows = [r for r in rows if r["price"]]
+    rows.sort(key=momentum_score, reverse=True)
+    logger.info(f"ETF: {len(rows)} trovati → top {min(10, len(rows))}")
+    return rows[:10]
+
+# ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
+YF_TO_TV_EXCH = {
+    ".MI": "BVME", ".PA": "XPAR", ".DE": "XETR", ".F":  "FWB",
+    ".AS": "XAMS", ".L":  "LSE",  ".ST": "XSTO", ".HE": "XHEL",
+    ".CO": "XCOP", ".OL": "XOSL", ".SW": "XSWX", ".MC": "XMAD",
+    ".T":  "TSE",  ".HK": "HKEX", ".TO": "TSX",  ".AX": "ASX",
+}
+
+def yf_to_tv(yf_sym):
+    """Converte ticker Yahoo Finance → exchange:symbol TradingView."""
+    for sfx, exch in YF_TO_TV_EXCH.items():
+        if yf_sym.endswith(sfx):
+            return f"{exch}:{yf_sym[:-len(sfx)]}"
+    return f"NASDAQ:{yf_sym}"   # US stock (fallback NYSE provato sotto)
+
+def get_portfolio_data():
+    """Recupera dati tecnici del portafoglio via TradingView screener."""
+    if not PORTFOLIO:
+        return []
+
+    tv_syms = [yf_to_tv(p["symbol"]) for p in PORTFOLIO]
+    results_by_tv = {}
+    try:
+        data = tv_request("https://scanner.tradingview.com/global/scan",
+                          {"symbols": {"tickers": tv_syms}, "columns": TV_COLS})
+        for row in (data.get("data") or []):
+            parsed = parse_tv_row(row)
+            results_by_tv[row.get("s", "")] = parsed
+    except Exception as e:
+        logger.warning(f"Portfolio TV fetch: {e}")
+
     out = []
-    for item in PORTFOLIO:
-        d = get_data(item["symbol"], private=True) or {}
-        d.update({"name": item["name"], "type": item["type"], "symbol": item["symbol"]})
-        if d.get("price") and d.get("ema20") and d.get("ema50"):
-            if d["price"] > d["ema20"] and d["price"] > d["ema50"]:
-                d["trend"] = "Rialzista"
-            elif d["price"] < d["ema20"] and d["price"] < d["ema50"]:
-                d["trend"] = "Ribassista"
-            else:
-                d["trend"] = "Laterale"
+    for item, tv_sym in zip(PORTFOLIO, tv_syms):
+        parsed = results_by_tv.get(tv_sym)
+        # US ticker non trovato su NASDAQ → riprova con NYSE
+        if not parsed and tv_sym.startswith("NASDAQ:"):
+            alt = tv_sym.replace("NASDAQ:", "NYSE:")
+            try:
+                d2 = tv_request("https://scanner.tradingview.com/global/scan",
+                                {"symbols": {"tickers": [alt]}, "columns": TV_COLS})
+                rows2 = d2.get("data") or []
+                if rows2:
+                    parsed = parse_tv_row(rows2[0])
+            except Exception:
+                pass
+
+        if parsed:
+            parsed["name"]      = item.get("name", parsed["symbol"])
+            parsed["type"]      = item.get("type", "Azione")
+            parsed["yf_symbol"] = item["symbol"]
         else:
-            d["trend"] = "n.d."
-        out.append(d)
+            logger.warning(f"Dati non trovati per {item['symbol']}")
+            parsed = {
+                "symbol": item["symbol"].split(".")[0], "yf_symbol": item["symbol"],
+                "name": item.get("name", item["symbol"]), "type": item.get("type", "Azione"),
+                "price": None, "rsi": None, "trend": "n.d.",
+                "macd_str": "n.d.", "perf_1m": None, "rec_str": "n.d.", "rec": 0,
+            }
+        out.append(parsed)
     return out
 
+# ─── INDICI DI MERCATO ────────────────────────────────────────────────────────
+INDICES_MAP = {
+    "S&P 500":      "^GSPC",
+    "NASDAQ":       "^IXIC",
+    "Eurostoxx 50": "^STOXX50E",
+    "FTSE MIB":     "FTSEMIB.MI",
+}
+
 def get_indices():
-    idxs = {"S&P 500": "^GSPC", "NASDAQ": "^IXIC", "Eurostoxx 50": "^STOXX50E", "FTSE MIB": "FTSEMIB.MI"}
+    """Recupera variazione % degli indici via Yahoo Finance JSON API (no libreria)."""
     out = {}
-    for name, sym in idxs.items():
-        try:
-            h = yf.Ticker(sym).history(period="5d")
-            out[name] = round(float((h["Close"].iloc[-1] / h["Close"].iloc[-2] - 1) * 100), 2) if len(h) >= 2 else None
-        except:
-            out[name] = None
+    syms = ",".join(INDICES_MAP.values())
+    try:
+        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={syms}"
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+        r.raise_for_status()
+        quotes = r.json().get("quoteResponse", {}).get("result", [])
+        by_sym = {v: k for k, v in INDICES_MAP.items()}
+        for q in quotes:
+            name = by_sym.get(q.get("symbol", ""))
+            chg  = q.get("regularMarketChangePercent")
+            if name and chg is not None:
+                out[name] = round(chg, 2)
+    except Exception as e:
+        logger.warning(f"Indices fetch: {e}")
+    for name in INDICES_MAP:
+        out.setdefault(name, None)
     return out
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
@@ -274,29 +376,41 @@ def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     def fmt(lst):
+        if not lst:
+            return "Nessun titolo ha superato il filtro oggi."
         return "\n".join(
-            f"- {d['symbol']}: prezzo {d['price']}, RSI {d['rsi']}, 1M {d.get('perf_1m','n.d.')}%, 3M {d.get('perf_3m','n.d.')}%"
+            f"- {d['symbol']} ({d.get('name','')}): prezzo {d['price']}, RSI {d['rsi']}, "
+            f"1M {d.get('perf_1m','n.d.')}%, MACD {d.get('macd_str','n.d.')}, TV Rec: {d.get('rec_str','n.d.')}"
             for d in lst
-        ) or "Nessun titolo ha superato il filtro oggi."
+        )
 
     port_txt = "\n".join(
-        f"- {p['name']} ({p['symbol']}): prezzo {p.get('price','n.d.')}, RSI {p.get('rsi','n.d.')}, trend {p['trend']}, 1M {p.get('perf_1m','n.d.')}%"
+        f"- {p['name']} ({p.get('yf_symbol', p['symbol'])}): prezzo {p.get('price','n.d.')}, "
+        f"RSI {p.get('rsi','n.d.')}, trend {p.get('trend','n.d.')}, "
+        f"MACD {p.get('macd_str','n.d.')}, 1M {p.get('perf_1m','n.d.')}%, TV Rec: {p.get('rec_str','n.d.')}"
         for p in portfolio
+    ) or "Portafoglio vuoto."
+
+    idx_txt = "\n".join(
+        f"- {k}: {v:+.2f}%" if v is not None else f"- {k}: n.d."
+        for k, v in indices.items()
     )
-    idx_txt = "\n".join(f"- {k}: {v:+.2f}%" if v else f"- {k}: n.d." for k, v in indices.items())
 
     prompt = f"""Sei un analista finanziario esperto. Data: {datetime.now().strftime('%d/%m/%Y')}.
+
+I dati tecnici provengono da TradingView. MACD indica la direzione del momentum (↑ = rialzista, ↓ = ribassista).
+TV Rec è la raccomandazione aggregata di 26 indicatori TradingView (Compra Forte / Compra / Neutro / Vendi / Vendi Forte).
 
 INDICI:
 {idx_txt}
 
-TOP AZIONI ITALIANE (filtro momentum):
+TOP AZIONI ITALIANE (screener TV — filtro RSI+EMA+MACD):
 {fmt(stocks_it)}
 
-TOP AZIONI USA (filtro momentum):
+TOP AZIONI USA (screener TV — filtro RSI+EMA+MACD+cap>100M):
 {fmt(stocks_us)}
 
-TOP ETF TEMATICI (filtro momentum):
+TOP ETF (screener TV — filtro RSI+EMA+MACD):
 {fmt(etfs)}
 
 PORTAFOGLIO STEFANO:
@@ -305,14 +419,15 @@ PORTAFOGLIO STEFANO:
 Genera un JSON con questa struttura ESATTA (solo JSON puro, zero markdown):
 {{
   "contesto_mercato": "2-3 frasi professionali su sentiment e indici",
-  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe","rating":"Forte"}}],
-  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe","rating":"Moderato"}}],
+  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe che citano MACD e TV Rec","rating":"Forte"}}],
+  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe che citano MACD e TV Rec","rating":"Moderato"}}],
   "etfs_analysis": [{{"symbol":"TICKER","tema":"AI / Semiconduttori / ecc.","motivazione":"2-3 righe","rating":"Forte"}}],
-  "portfolio_analysis": [{{"symbol":"TICKER","segnale":"Accumula","motivazione":"2-3 righe"}}],
+  "portfolio_analysis": [{{"symbol":"TICKER","segnale":"Accumula","motivazione":"2-3 righe con riferimento a MACD e trend"}}],
   "sintesi_portafoglio": "2-3 frasi di sintesi operativa"
 }}
 Rating: Forte o Moderato. Segnale: Accumula, Mantieni o Riduci.
-Per LBRT.MI menziona sempre il rischio decay da leva giornaliera."""
+Usa il campo symbol uguale al ticker TV (senza exchange prefix) per portfolio_analysis.
+Per qualsiasi ETF a leva (es. LBRT.MI) menziona sempre il rischio decay da leva giornaliera."""
 
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -347,30 +462,49 @@ def idx_badge(val):
     return f'<span style="color:{color};font-weight:700">{sign}{val:.2f}%</span>'
 
 def candle_badge(pattern):
-    """Colore badge candela in base al tipo."""
-    if not pattern or pattern == "—":
+    """Badge colorato per pattern candela giapponese."""
+    if not pattern or pattern in ("—", "n.d."):
         return '<span style="color:#999">—</span>'
     if any(x in pattern for x in ["Bullish", "Hammer ▲", "Inv. Hammer ▲", "Engulfing ▲"]):
         return f'<span style="color:#16a34a;font-size:12px">{pattern}</span>'
-    if any(x in pattern for x in ["Bearish", "Shooting Star", "Hanging Man", "Engulfing ▼"]):
+    if any(x in pattern for x in ["Bearish", "Shooting Star ▼", "Hanging Man ▼", "Engulfing ▼"]):
         return f'<span style="color:#dc2626;font-size:12px">{pattern}</span>'
     return f'<span style="color:#888;font-size:12px">{pattern}</span>'
 
+def macd_badge(macd_str):
+    """Badge MACD: verde se rialzista, rosso se ribassista."""
+    if not macd_str or macd_str == "n.d.":
+        return '<span style="color:#999">n.d.</span>'
+    color = "#16a34a" if macd_str.startswith("↑") else "#dc2626"
+    return f'<span style="color:{color};font-size:12px;font-weight:600">{macd_str}</span>'
+
+def rec_badge(rec_str):
+    """Badge TV Rec.All (aggregato 26 indicatori)."""
+    colors = {
+        "Compra Forte": "#15803d", "Compra": "#16a34a",
+        "Neutro": "#888", "Vendi": "#dc2626", "Vendi Forte": "#991b1b",
+    }
+    c = colors.get(rec_str, "#888")
+    return f'<span style="color:{c};font-size:12px;font-weight:700">● {rec_str}</span>'
+
 def stock_rows(lst, analysis_map):
     if not lst:
-        return '<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (segnale stabile richiesto per 3 giorni consecutivi)</td></tr>'
+        return '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (RSI 48-75, prezzo &gt; EMA20/50, MACD &gt; 0)</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
+        price_str = f"{d['price']:.2f}" if d.get("price") else "n.d."
         rows += f"""<tr>
             <td style="color:#999;font-size:12px">{i}</td>
-            <td><strong>{d['symbol']}</strong></td>
-            <td>{d['price']:.2f}</td>
-            <td>{d['rsi'] or 'n.d.'}</td>
+            <td><strong>{d['symbol']}</strong><br><span style="color:#888;font-size:11px">{d.get('name','')}</span></td>
+            <td>{price_str}</td>
+            <td>{d['rsi'] if d.get('rsi') else 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
             <td>{pct(d.get('perf_3m'))}</td>
             <td>{candle_badge(d.get('candle_d','—'))}</td>
             <td>{candle_badge(d.get('candle_w','—'))}</td>
+            <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
+            <td>{rec_badge(d.get('rec_str','Neutro'))}</td>
             <td>{rating_badge(a.get('rating','Moderato'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -378,20 +512,22 @@ def stock_rows(lst, analysis_map):
 
 def etf_rows(lst, analysis_map):
     if not lst:
-        return '<tr><td colspan="11" style="text-align:center;color:#999;padding:20px">Nessun ETF ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px">Nessun ETF ha superato il filtro oggi</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
+        price_str = f"{d['price']:.2f}" if d.get("price") else "n.d."
         rows += f"""<tr>
             <td style="color:#999;font-size:12px">{i}</td>
             <td><strong>{d['symbol']}</strong></td>
             <td style="color:#6366f1;font-size:13px">{a.get('tema','Tematico')}</td>
-            <td>{d['price']:.2f}</td>
-            <td>{d['rsi'] or 'n.d.'}</td>
+            <td>{price_str}</td>
+            <td>{d['rsi'] if d.get('rsi') else 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
             <td>{pct(d.get('perf_3m'))}</td>
             <td>{candle_badge(d.get('candle_d','—'))}</td>
             <td>{candle_badge(d.get('candle_w','—'))}</td>
+            <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{rating_badge(a.get('rating','Moderato'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -400,16 +536,24 @@ def etf_rows(lst, analysis_map):
 def portfolio_rows(portfolio, analysis_map):
     rows = ""
     for p in portfolio:
-        a = analysis_map.get(p["symbol"], {})
-        trend_color = {"Rialzista": "#16a34a", "Ribassista": "#dc2626", "Laterale": "#d97706"}.get(p["trend"], "#999")
+        sym_key = p.get("symbol", "")
+        a = analysis_map.get(sym_key, {})
+        trend = p.get("trend", "n.d.")
+        trend_color = {
+            "Rialzista": "#16a34a", "Rialzista (>EMA200)": "#15803d",
+            "Ribassista": "#dc2626", "Laterale": "#d97706", "Sopra EMA20": "#2563eb",
+        }.get(trend, "#999")
         price_str = f"{p['price']:.2f}" if p.get("price") else "n.d."
+        yf_sym = p.get("yf_symbol", sym_key)
         rows += f"""<tr>
-            <td><strong>{p['name']}</strong><br><span style="color:#999;font-size:11px">{p['symbol']}</span></td>
+            <td><strong>{p['name']}</strong><br><span style="color:#999;font-size:11px">{yf_sym}</span></td>
             <td style="font-size:12px;color:#666">{p.get('type','')}</td>
             <td>{price_str}</td>
-            <td>{p.get('rsi') or 'n.d.'}</td>
-            <td style="color:{trend_color};font-weight:600">{p['trend']}</td>
+            <td>{p['rsi'] if p.get('rsi') else 'n.d.'}</td>
+            <td style="color:{trend_color};font-weight:600;font-size:12px">{trend}</td>
             <td>{pct(p.get('perf_1m'))}</td>
+            <td>{candle_badge(p.get('candle_d','—'))}</td>
+            <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
             <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -668,6 +812,36 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     return "Azione";
   }}
 
+  // Mappa exchange TradingView → suffisso Yahoo Finance
+  var TV_SUFFIX = {{
+    "BVME":".MI","MIL":".MI","XMIL":".MI",
+    "XPAR":".PA","EPA":".PA",
+    "XETR":".DE","XETRA":".DE","FWB":".F",
+    "XAMS":".AS","AMS":".AS",
+    "LSE":".L","XLON":".L",
+    "XSTO":".ST","STO":".ST",
+    "XHEL":".HE","HEL":".HE",
+    "XCOP":".CO","CPH":".CO",
+    "XOSL":".OL","OSL":".OL",
+    "XSWX":".SW","SWX":".SW",
+    "XMAD":".MC","MCE":".MC",
+    "XLIS":".LS","LIS":".LS",
+    "XBRU":".BR","BRU":".BR",
+    "XWAR":".WA","WSE":".WA",
+    "XASX":".AX","ASX":".AX",
+    "XTSE":".T","TSE":".T",
+    "HKEX":".HK","HKG":".HK",
+    "XTSX":".TO","TSX":".TO",
+    "JSE":".JO"
+  }};
+
+  function tvToYahoo(symbol, exchange) {{
+    var us = ["NYSE","NASDAQ","AMEX","CBOE","BATS","ARCA"];
+    for (var i = 0; i < us.length; i++) {{ if (exchange === us[i]) return symbol; }}
+    var sfx = TV_SUFFIX[exchange];
+    return sfx ? symbol + sfx : symbol;
+  }}
+
   function searchLocal(q) {{
     var ql = q.toLowerCase();
     return STATIC_STOCKS.filter(function(s) {{
@@ -686,32 +860,64 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   }}
 
   async function doSearch(q) {{
+    document.getElementById("manual-add").style.display = "none";
     var local = searchLocal(q);
     if (local.length > 0) {{
       showDropdown(local);
-      document.getElementById("search-status").textContent = "";
-      document.getElementById("manual-add").style.display = "none";
+      document.getElementById("search-status").textContent = "🔍 Espandendo ricerca...";
     }} else {{
-      document.getElementById("search-status").textContent = "🔍 Ricerca online...";
+      document.getElementById("search-status").textContent = "🔍 Ricerca in corso...";
     }}
+    // 1) TradingView (ampia copertura, incluse small/mid cap)
     try {{
-      var online = await searchYahoo(q);
-      if (online.length > 0) {{
-        showDropdown(online);
+      var tv = await searchTradingView(q);
+      if (tv.length > 0) {{
+        var seen = {{}};
+        var merged = local.concat(tv).filter(function(s) {{
+          if (seen[s.symbol]) return false;
+          seen[s.symbol] = true; return true;
+        }}).slice(0, 12);
+        showDropdown(merged);
         document.getElementById("search-status").textContent = "";
-        document.getElementById("manual-add").style.display = "none";
-      }} else if (local.length === 0) {{
-        hideDropdown();
-        document.getElementById("search-status").textContent = "Nessun risultato. Aggiungi il ticker manualmente.";
-        document.getElementById("manual-add").style.display = "inline-block";
+        return;
       }}
-    }} catch(e) {{
-      if (local.length === 0) {{
-        hideDropdown();
-        document.getElementById("search-status").textContent = "Nessun risultato. Aggiungi il ticker manualmente.";
-        document.getElementById("manual-add").style.display = "inline-block";
+    }} catch(e) {{}}
+    // 2) Yahoo Finance via proxy
+    try {{
+      var yf = await searchYahoo(q);
+      if (yf.length > 0) {{
+        showDropdown(yf);
+        document.getElementById("search-status").textContent = "";
+        return;
       }}
+    }} catch(e) {{}}
+    // 3) Solo lista locale o nessun risultato
+    if (local.length > 0) {{
+      showDropdown(local);
+      document.getElementById("search-status").textContent = "";
+    }} else {{
+      hideDropdown();
+      document.getElementById("search-status").textContent = "Nessun risultato. Aggiungi il ticker manualmente.";
+      document.getElementById("manual-add").style.display = "inline-block";
     }}
+  }}
+
+  async function searchTradingView(q) {{
+    var url = "https://symbol-search.tradingview.com/symbol_search/v3/?text=" +
+              encodeURIComponent(q) + "&hl=1&exchange=&lang=en&search_type=undefined&domain=production&sort_by_country=IT";
+    var r = await Promise.race([
+      fetch(url),
+      new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("timeout")); }}, 6000); }})
+    ]);
+    if (!r.ok) return [];
+    var data = await r.json();
+    var symbols = data.symbols || (Array.isArray(data) ? data : []);
+    return symbols.slice(0, 15).map(function(s) {{
+      var exch = s.exchange || s.listed_exchange || "";
+      var yfsym = tvToYahoo(s.symbol || "", exch);
+      var tp = (s.type === "fund" || s.type === "dr" || s.type === "structured") ? "ETF" : "Azione";
+      return {{symbol: yfsym, shortname: s.description || s.symbol, exchDisp: exch, quoteType: tp === "ETF" ? "ETF" : "EQUITY"}};
+    }}).filter(function(s) {{ return s.symbol.length > 0; }});
   }}
 
   async function searchYahoo(q) {{
@@ -727,7 +933,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
         var p = proxies[i];
         var r = await Promise.race([
           fetch(p.url),
-          new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("timeout")); }}, 5000); }})
+          new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("t")); }}, 5000); }})
         ]);
         if (!r.ok) continue;
         var data = await r.json();
@@ -933,7 +1139,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>TV Rec.</th><th>Rating</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_it, sm_it)}</tbody>
     </table>
@@ -945,7 +1151,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>TV Rec.</th><th>Rating</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_us, sm_us)}</tbody>
     </table>
@@ -957,7 +1163,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if etfs else '<p class="empty-note">Nessun ETF ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Rating</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em)}</tbody>
     </table>
@@ -968,7 +1174,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <h2>💼 Portafoglio — Analisi Tecnica</h2>
     <table>
       <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>Segnale</th><th>Analisi</th>
+        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>Candela 1D</th><th>MACD</th><th>Segnale</th><th>Analisi</th>
       </tr></thead>
       <tbody>{portfolio_rows(portfolio, pm)}</tbody>
     </table>
@@ -1083,10 +1289,10 @@ def main():
     logger.info("=== Trading Report Generator (GitHub Pages) ===")
 
     indices   = get_indices()
-    stocks_it = screen(STOCK_UNIVERSE_IT, "Azioni IT", min_price=0.5)
-    stocks_us = screen(STOCK_UNIVERSE_US, "Azioni US", min_price=5.0)
-    etfs      = screen(ETF_UNIVERSE, "ETF", min_price=5.0)
-    portfolio = get_portfolio()
+    stocks_it = screen_italy()
+    stocks_us = screen_usa()
+    etfs      = screen_etfs()
+    portfolio = get_portfolio_data()
 
     logger.info("Generating analysis with Claude...")
     analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
