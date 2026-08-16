@@ -609,9 +609,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       var nm  = q.shortname || q.longname || sym;
       var ex  = q.exchDisp || q.exchange || "";
       var tp  = guessType(q);
-      return '<div onmousedown="addFromSearch(' + idx + ')" ' +
-        'style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:8px" ' +
-        'onmouseover="this.style.background=\'#f0f4f8\'" onmouseout="this.style.background=\'\'">' +
+      return '<div class="dd-item" onmousedown="addFromSearch(' + idx + ')">' +
         '<span style="font-weight:600;font-family:monospace;color:#1e3a5f;min-width:70px">' + sym + '</span>' +
         '<span style="flex:1;font-size:13px;color:#333;overflow:hidden;text-overflow:ellipsis">' + nm + '</span>' +
         '<span style="font-size:11px;color:#888;white-space:nowrap">' + ex + ' &middot; ' + tp + '</span>' +
@@ -752,6 +750,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   .disclaimer {{ font-size: 11px; color: #999; line-height: 1.6; margin-top: 8px; }}
   .gen-time {{ font-size: 12px; color: #aaa; text-align: right; margin-top: 8px; }}
   .gh-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }}
+  .dd-item {{ padding:9px 12px; cursor:pointer; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; gap:8px; }}
+  .dd-item:hover {{ background:#f0f4f8; }}
   @media (max-width: 768px) {{
     .header {{ padding: 20px 16px; }}
     .header h1 {{ font-size: 20px; }}
