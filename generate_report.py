@@ -181,6 +181,7 @@ def parse_tv_row(row):
         "ema50":      ema50,
         "ema200":     ema200,
         "macd_str":   macd_str,
+        "macd_hist":  hist,      # usato per filtro Python
         "candle_d":   candle_d,
         "candle_w":   candle_w,
         "perf_1m":    round(p1m, 1) if p1m is not None else None,
@@ -202,16 +203,33 @@ def momentum_score(d):
         ((d.get("vol_ratio") or 1) - 1) * 3
     )
 
-# ─── SCREENER ITALIA (tutte le capitalizzazioni) ──────────────────────────────
+# ─── HELPER FILTRO PYTHON ────────────────────────────────────────────────────
+def _passes_momentum(r, min_price=0.2, min_perf1m=0):
+    """Filtro applicato in Python dopo la risposta TV (evita cross-column filter API)."""
+    if not r.get("price") or r["price"] < min_price:
+        return False
+    ema20 = r.get("ema20") or 0
+    ema50 = r.get("ema50") or 0
+    # Trend: prezzo sopra EMA20 e EMA20 sopra EMA50
+    if not (ema20 and ema50 and r["price"] > ema20 > ema50):
+        return False
+    # Performance mensile positiva
+    if (r.get("perf_1m") or 0) < min_perf1m:
+        return False
+    # MACD in territorio positivo (histogram > 0)
+    if (r.get("macd_hist") or 0) <= 0:
+        return False
+    return True
+
+# ─── SCREENER ITALIA (tutti i titoli quotati su Borsa Italiana) ───────────────
 def screen_italy():
-    logger.info("Screening Italia — TradingView (FTSE MIB + Mid + Small cap)...")
+    logger.info("Screening Italia — TradingView (tutti i titoli)...")
     payload = {
+        # Filtri minimi sull'API: solo RSI e volume minimo
+        # I confronti colonna-colonna (close>EMA) vengono fatti in Python
         "filter": [
-            {"left": "RSI",                     "operation": "in_range", "right": [48, 75]},
-            {"left": "close",                   "operation": "greater",  "right": "EMA20"},
-            {"left": "EMA20",                   "operation": "greater",  "right": "EMA50"},
-            {"left": "change|1M",               "operation": "greater",  "right": 0},
-            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 20000},
+            {"left": "RSI",                     "operation": "in_range", "right": [35, 82]},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 5000},
             {"left": "MACD.hist",               "operation": "greater",  "right": 0},
         ],
         "options": {"lang": "en"},
@@ -219,13 +237,13 @@ def screen_italy():
         "symbols": {"query": {"types": ["stock"]}, "tickers": []},
         "columns": TV_COLS,
         "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
-        "range": [0, 80]
+        "range": [0, 200]
     }
     data = tv_request("https://scanner.tradingview.com/italy/scan", payload)
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
-    rows = [r for r in rows if r["price"] and r["price"] > 0.2]
+    rows = [r for r in rows if _passes_momentum(r, min_price=0.2, min_perf1m=0)]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"Italia: {len(rows)} titoli filtrati → top {min(10, len(rows))}")
+    logger.info(f"Italia: {len(rows)} titoli → top {min(10, len(rows))}")
     return rows[:10]
 
 # ─── SCREENER USA (large + mid + small cap) ───────────────────────────────────
@@ -233,11 +251,8 @@ def screen_usa():
     logger.info("Screening USA — TradingView (tutte le cap)...")
     payload = {
         "filter": [
-            {"left": "RSI",                     "operation": "in_range", "right": [48, 75]},
-            {"left": "close",                   "operation": "greater",  "right": "EMA20"},
-            {"left": "EMA20",                   "operation": "greater",  "right": "EMA50"},
-            {"left": "change|1M",               "operation": "greater",  "right": 1},
-            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 150000},
+            {"left": "RSI",                     "operation": "in_range", "right": [35, 82]},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 100000},
             {"left": "market_cap_basic",        "operation": "greater",  "right": 100000000},
             {"left": "MACD.hist",               "operation": "greater",  "right": 0},
         ],
@@ -246,13 +261,13 @@ def screen_usa():
         "symbols": {"query": {"types": ["stock"]}, "tickers": []},
         "columns": TV_COLS,
         "sort": {"sortBy": "Rec.All", "sortOrder": "desc"},
-        "range": [0, 100]
+        "range": [0, 200]
     }
     data = tv_request("https://scanner.tradingview.com/america/scan", payload)
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
-    rows = [r for r in rows if r["price"] and r["price"] > 1]
+    rows = [r for r in rows if _passes_momentum(r, min_price=1.0, min_perf1m=1)]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"USA: {len(rows)} titoli filtrati → top {min(10, len(rows))}")
+    logger.info(f"USA: {len(rows)} titoli → top {min(10, len(rows))}")
     return rows[:10]
 
 # ─── SCREENER ETF ─────────────────────────────────────────────────────────────
@@ -260,10 +275,8 @@ def screen_etfs():
     logger.info("Screening ETF — TradingView...")
     payload = {
         "filter": [
-            {"left": "RSI",                     "operation": "in_range", "right": [48, 75]},
-            {"left": "close",                   "operation": "greater",  "right": "EMA20"},
-            {"left": "change|1M",               "operation": "greater",  "right": 1},
-            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 15000},
+            {"left": "RSI",                     "operation": "in_range", "right": [35, 82]},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 5000},
             {"left": "MACD.hist",               "operation": "greater",  "right": 0},
         ],
         "options": {"lang": "en"},
@@ -271,11 +284,11 @@ def screen_etfs():
         "symbols": {"query": {"types": ["fund", "dr"]}, "tickers": []},
         "columns": TV_COLS,
         "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
-        "range": [0, 50]
+        "range": [0, 150]
     }
     data = tv_request("https://scanner.tradingview.com/global/scan", payload)
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
-    rows = [r for r in rows if r["price"]]
+    rows = [r for r in rows if r.get("price") and _passes_momentum(r, min_price=0.5, min_perf1m=0)]
     rows.sort(key=momentum_score, reverse=True)
     logger.info(f"ETF: {len(rows)} trovati → top {min(10, len(rows))}")
     return rows[:10]
@@ -536,7 +549,8 @@ def etf_rows(lst, analysis_map):
 def portfolio_rows(portfolio, analysis_map):
     rows = ""
     for p in portfolio:
-        sym_key = p.get("symbol", "")
+        # Claude risponde con yf_symbol (es. "OMER.MI"), non il ticker TV (es. "OMER")
+        sym_key = p.get("yf_symbol", p.get("symbol", ""))
         a = analysis_map.get(sym_key, {})
         trend = p.get("trend", "n.d.")
         trend_color = {
