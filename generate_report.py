@@ -295,24 +295,48 @@ def screen_etfs():
 
 # ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
 
-def get_portfolio_data():
-    """Recupera dati tecnici del portafoglio via TradingView screener.
-    I simboli devono essere nel formato TV nativo: 'EXCHANGE:TICKER' oppure solo 'TICKER'."""
-    if not PORTFOLIO:
-        return []
+# Prefissi exchange da tentare per ticker senza prefisso (ETC/ETF europei)
+_FALLBACK_EXCHANGES = ["MIL", "XMIL", "BVME", "LSE", "XETR", "XAMS", "EURONEXT"]
 
-    tv_syms = [p["symbol"] for p in PORTFOLIO]
+def _tv_fetch_symbols(syms):
+    """Chiama la TV screener API e restituisce dict {simbolo: parsed}."""
     results = {}
+    if not syms:
+        return results
     try:
         data = tv_request("https://scanner.tradingview.com/global/scan",
-                          {"symbols": {"tickers": tv_syms}, "columns": TV_COLS})
+                          {"symbols": {"tickers": syms}, "columns": TV_COLS})
         for row in (data.get("data") or []):
             s      = row.get("s", "")
             parsed = parse_tv_row(row)
-            results[s] = parsed                  # chiave piena  "MIL:OMER"
-            results[s.split(":")[-1]] = parsed   # chiave breve  "OMER"
+            results[s] = parsed
+            results[s.split(":")[-1]] = parsed
     except Exception as e:
-        logger.warning(f"Portfolio TV fetch: {e}")
+        logger.warning(f"TV fetch batch: {e}")
+    return results
+
+def get_portfolio_data():
+    """Recupera dati tecnici del portafoglio via TradingView screener.
+    Accetta 'EXCHANGE:TICKER' oppure solo 'TICKER'.
+    Per i ticker senza prefisso che non vengono trovati, riprova con i principali exchange europei."""
+    if not PORTFOLIO:
+        return []
+
+    # Fetch iniziale con i simboli così come sono nel secret
+    tv_syms = [p["symbol"] for p in PORTFOLIO]
+    results = _tv_fetch_symbols(tv_syms)
+
+    # Identifica i ticker senza prefisso che non hanno avuto risposta
+    missing_bare = [p["symbol"] for p in PORTFOLIO
+                    if ":" not in p["symbol"] and
+                       p["symbol"] not in results]
+
+    # Retry con prefissi exchange per i ticker mancanti
+    if missing_bare:
+        logger.info(f"Portfolio retry con exchange fallback per: {missing_bare}")
+        retry_syms = [f"{ex}:{t}" for t in missing_bare for ex in _FALLBACK_EXCHANGES]
+        retry_results = _tv_fetch_symbols(retry_syms)
+        results.update(retry_results)
 
     out = []
     for item in PORTFOLIO:
@@ -325,7 +349,7 @@ def get_portfolio_data():
             parsed["yf_symbol"] = sym
             logger.info(f"Portfolio: {sym} → prezzo {parsed.get('price')}")
         else:
-            logger.warning(f"Portfolio: dati non trovati per '{sym}'")
+            logger.warning(f"Portfolio: dati non trovati per '{sym}' (ticker={ticker})")
             parsed = {
                 "symbol": ticker, "yf_symbol": sym,
                 "name": item.get("name", sym), "type": item.get("type", "Azione"),
