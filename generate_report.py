@@ -294,62 +294,81 @@ def screen_etfs():
     return rows[:10]
 
 # ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
-YF_TO_TV_EXCH = {
-    ".MI": "BVME", ".PA": "XPAR", ".DE": "XETR", ".F":  "FWB",
-    ".AS": "XAMS", ".L":  "LSE",  ".ST": "XSTO", ".HE": "XHEL",
-    ".CO": "XCOP", ".OL": "XOSL", ".SW": "XSWX", ".MC": "XMAD",
-    ".T":  "TSE",  ".HK": "HKEX", ".TO": "TSX",  ".AX": "ASX",
+# Exchange candidates per suffisso Yahoo Finance.
+# Per Borsa Italiana (.MI) proviamo tutti e tre i codici che TV usa.
+YF_TO_TV_CANDIDATES = {
+    ".MI": ["BVME", "MIL", "XMIL"],
+    ".PA": ["XPAR"],
+    ".DE": ["XETR"],
+    ".F":  ["FWB"],
+    ".AS": ["XAMS"],
+    ".L":  ["LSE"],
+    ".ST": ["XSTO"],
+    ".HE": ["XHEL"],
+    ".CO": ["XCOP"],
+    ".OL": ["XOSL"],
+    ".SW": ["XSWX"],
+    ".MC": ["XMAD"],
+    ".T":  ["TSE"],
+    ".HK": ["HKEX"],
+    ".TO": ["TSX"],
+    ".AX": ["ASX"],
 }
 
-def yf_to_tv(yf_sym):
-    """Converte ticker Yahoo Finance → exchange:symbol TradingView."""
-    for sfx, exch in YF_TO_TV_EXCH.items():
+def yf_to_tv_candidates(yf_sym):
+    """Restituisce la lista di simboli TV da provare per un ticker Yahoo."""
+    for sfx, exchs in YF_TO_TV_CANDIDATES.items():
         if yf_sym.endswith(sfx):
-            return f"{exch}:{yf_sym[:-len(sfx)]}"
-    return f"NASDAQ:{yf_sym}"   # US stock (fallback NYSE provato sotto)
+            ticker = yf_sym[:-len(sfx)]
+            return [f"{e}:{ticker}" for e in exchs]
+    # Azione USA senza suffisso
+    return [f"NASDAQ:{yf_sym}", f"NYSE:{yf_sym}", f"AMEX:{yf_sym}"]
 
 def get_portfolio_data():
-    """Recupera dati tecnici del portafoglio via TradingView screener."""
+    """Recupera dati tecnici del portafoglio via TradingView screener.
+    Prova più codici exchange per Borsa Italiana e altri mercati."""
     if not PORTFOLIO:
         return []
 
-    tv_syms = [yf_to_tv(p["symbol"]) for p in PORTFOLIO]
+    # Costruisce mappa item → lista candidati TV
+    item_cands = [(item, yf_to_tv_candidates(item["symbol"])) for item in PORTFOLIO]
+
+    # Batch unico con tutti i candidati
+    all_cands = [c for _, cands in item_cands for c in cands]
     results_by_tv = {}
     try:
         data = tv_request("https://scanner.tradingview.com/global/scan",
-                          {"symbols": {"tickers": tv_syms}, "columns": TV_COLS})
+                          {"symbols": {"tickers": all_cands}, "columns": TV_COLS})
         for row in (data.get("data") or []):
             parsed = parse_tv_row(row)
             results_by_tv[row.get("s", "")] = parsed
     except Exception as e:
-        logger.warning(f"Portfolio TV fetch: {e}")
+        logger.warning(f"Portfolio TV batch fetch: {e}")
 
     out = []
-    for item, tv_sym in zip(PORTFOLIO, tv_syms):
-        parsed = results_by_tv.get(tv_sym)
-        # US ticker non trovato su NASDAQ → riprova con NYSE
-        if not parsed and tv_sym.startswith("NASDAQ:"):
-            alt = tv_sym.replace("NASDAQ:", "NYSE:")
-            try:
-                d2 = tv_request("https://scanner.tradingview.com/global/scan",
-                                {"symbols": {"tickers": [alt]}, "columns": TV_COLS})
-                rows2 = d2.get("data") or []
-                if rows2:
-                    parsed = parse_tv_row(rows2[0])
-            except Exception:
-                pass
+    for item, candidates in item_cands:
+        yf_sym = item["symbol"]
+        parsed = None
+        for tv_sym in candidates:
+            if tv_sym in results_by_tv:
+                parsed = results_by_tv[tv_sym]
+                logger.info(f"Trovato {yf_sym} come {tv_sym}")
+                break
 
         if parsed:
             parsed["name"]      = item.get("name", parsed["symbol"])
             parsed["type"]      = item.get("type", "Azione")
-            parsed["yf_symbol"] = item["symbol"]
+            parsed["yf_symbol"] = yf_sym
         else:
-            logger.warning(f"Dati non trovati per {item['symbol']}")
+            logger.warning(f"Dati non trovati per {yf_sym} (candidati: {candidates})")
             parsed = {
-                "symbol": item["symbol"].split(".")[0], "yf_symbol": item["symbol"],
-                "name": item.get("name", item["symbol"]), "type": item.get("type", "Azione"),
+                "symbol": yf_sym.split(".")[0], "yf_symbol": yf_sym,
+                "name": item.get("name", yf_sym), "type": item.get("type", "Azione"),
                 "price": None, "rsi": None, "trend": "n.d.",
-                "macd_str": "n.d.", "perf_1m": None, "rec_str": "n.d.", "rec": 0,
+                "macd_str": "n.d.", "macd_hist": 0,
+                "perf_1m": None, "perf_3m": None,
+                "rec_str": "n.d.", "rec": 0,
+                "candle_d": "—", "candle_w": "—",
             }
         out.append(parsed)
     return out
@@ -576,14 +595,29 @@ def portfolio_rows(portfolio, analysis_map):
         </tr>"""
     return rows
 
+def _analysis_map(items):
+    """Costruisce dict symbol→analisi con lookup fuzzy:
+    indicizza con il simbolo esatto, senza suffisso (.MI/.PA/…) e senza prefisso exchange."""
+    m = {}
+    for a in items:
+        sym = a.get("symbol", "")
+        m[sym] = a
+        # senza suffisso (.MI, .PA, ecc.)
+        bare = sym.split(".")[0]
+        m.setdefault(bare, a)
+        # senza prefisso exchange (BVME:ENI → ENI)
+        if ":" in bare:
+            m.setdefault(bare.split(":")[-1], a)
+    return m
+
 def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]"):
     today = datetime.now().strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
-    sm_it  = {a["symbol"]: a for a in analysis.get("stocks_it_analysis", [])}
-    sm_us  = {a["symbol"]: a for a in analysis.get("stocks_us_analysis", [])}
-    em     = {a["symbol"]: a for a in analysis.get("etfs_analysis", [])}
-    pm     = {a["symbol"]: a for a in analysis.get("portfolio_analysis", [])}
+    sm_it  = _analysis_map(analysis.get("stocks_it_analysis", []))
+    sm_us  = _analysis_map(analysis.get("stocks_us_analysis", []))
+    em     = _analysis_map(analysis.get("etfs_analysis", []))
+    pm     = _analysis_map(analysis.get("portfolio_analysis", []))
 
     idx_html = "".join(
         f'<div class="idx-card"><div class="idx-name">{k}</div><div class="idx-val">{idx_badge(v)}</div></div>'
