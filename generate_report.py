@@ -318,7 +318,7 @@ def _tv_fetch_symbols(syms):
 def get_portfolio_data():
     """Recupera dati tecnici del portafoglio via TradingView screener.
     Accetta 'EXCHANGE:TICKER' oppure solo 'TICKER'.
-    Per i ticker senza prefisso che non vengono trovati, riprova con i principali exchange europei."""
+    Per qualsiasi simbolo non trovato al primo tentativo, riprova con i principali exchange europei."""
     if not PORTFOLIO:
         return []
 
@@ -326,15 +326,21 @@ def get_portfolio_data():
     tv_syms = [p["symbol"] for p in PORTFOLIO]
     results = _tv_fetch_symbols(tv_syms)
 
-    # Identifica i ticker senza prefisso che non hanno avuto risposta
-    missing_bare = [p["symbol"] for p in PORTFOLIO
-                    if ":" not in p["symbol"] and
-                       p["symbol"] not in results]
+    # Identifica TUTTI i ticker (con o senza prefisso) che non hanno avuto risposta
+    def _is_missing(sym):
+        ticker = sym.split(":")[-1] if ":" in sym else sym
+        return sym not in results and ticker not in results
 
-    # Retry con prefissi exchange per i ticker mancanti
-    if missing_bare:
-        logger.info(f"Portfolio retry con exchange fallback per: {missing_bare}")
-        retry_syms = [f"{ex}:{t}" for t in missing_bare for ex in _FALLBACK_EXCHANGES]
+    missing = [p["symbol"] for p in PORTFOLIO if _is_missing(p["symbol"])]
+
+    if missing:
+        logger.info(f"Portfolio retry exchange fallback per: {missing}")
+        # Estrai il ticker nudo e riprova con tutti gli exchange candidati
+        retry_syms = [
+            f"{ex}:{sym.split(':')[-1]}"
+            for sym in missing
+            for ex in _FALLBACK_EXCHANGES
+        ]
         retry_results = _tv_fetch_symbols(retry_syms)
         results.update(retry_results)
 
