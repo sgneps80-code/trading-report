@@ -294,76 +294,41 @@ def screen_etfs():
     return rows[:10]
 
 # ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
-# Exchange candidates per suffisso Yahoo Finance.
-# Per Borsa Italiana (.MI) proviamo tutti e tre i codici che TV usa.
-YF_TO_TV_CANDIDATES = {
-    ".MI": ["BVME", "MIL", "XMIL"],
-    ".PA": ["XPAR"],
-    ".DE": ["XETR"],
-    ".F":  ["FWB"],
-    ".AS": ["XAMS"],
-    ".L":  ["LSE"],
-    ".ST": ["XSTO"],
-    ".HE": ["XHEL"],
-    ".CO": ["XCOP"],
-    ".OL": ["XOSL"],
-    ".SW": ["XSWX"],
-    ".MC": ["XMAD"],
-    ".T":  ["TSE"],
-    ".HK": ["HKEX"],
-    ".TO": ["TSX"],
-    ".AX": ["ASX"],
-}
-
-def yf_to_tv_candidates(yf_sym):
-    """Restituisce la lista di simboli TV da provare per un ticker Yahoo."""
-    for sfx, exchs in YF_TO_TV_CANDIDATES.items():
-        if yf_sym.endswith(sfx):
-            ticker = yf_sym[:-len(sfx)]
-            return [f"{e}:{ticker}" for e in exchs]
-    # Azione USA senza suffisso
-    return [f"NASDAQ:{yf_sym}", f"NYSE:{yf_sym}", f"AMEX:{yf_sym}"]
 
 def get_portfolio_data():
     """Recupera dati tecnici del portafoglio via TradingView screener.
-    Prova più codici exchange per Borsa Italiana e altri mercati."""
+    I simboli devono essere nel formato TV nativo: 'EXCHANGE:TICKER' oppure solo 'TICKER'."""
     if not PORTFOLIO:
         return []
 
-    # Costruisce mappa item → lista candidati TV
-    item_cands = [(item, yf_to_tv_candidates(item["symbol"])) for item in PORTFOLIO]
-
-    # Batch unico con tutti i candidati
-    all_cands = [c for _, cands in item_cands for c in cands]
-    results_by_tv = {}
+    tv_syms = [p["symbol"] for p in PORTFOLIO]
+    results = {}
     try:
         data = tv_request("https://scanner.tradingview.com/global/scan",
-                          {"symbols": {"tickers": all_cands}, "columns": TV_COLS})
+                          {"symbols": {"tickers": tv_syms}, "columns": TV_COLS})
         for row in (data.get("data") or []):
+            s      = row.get("s", "")
             parsed = parse_tv_row(row)
-            results_by_tv[row.get("s", "")] = parsed
+            results[s] = parsed                  # chiave piena  "MIL:OMER"
+            results[s.split(":")[-1]] = parsed   # chiave breve  "OMER"
     except Exception as e:
-        logger.warning(f"Portfolio TV batch fetch: {e}")
+        logger.warning(f"Portfolio TV fetch: {e}")
 
     out = []
-    for item, candidates in item_cands:
-        yf_sym = item["symbol"]
-        parsed = None
-        for tv_sym in candidates:
-            if tv_sym in results_by_tv:
-                parsed = results_by_tv[tv_sym]
-                logger.info(f"Trovato {yf_sym} come {tv_sym}")
-                break
-
+    for item in PORTFOLIO:
+        sym    = item["symbol"]
+        ticker = sym.split(":")[-1] if ":" in sym else sym
+        parsed = results.get(sym) or results.get(ticker)
         if parsed:
-            parsed["name"]      = item.get("name", parsed["symbol"])
+            parsed["name"]      = item.get("name", parsed.get("symbol", sym))
             parsed["type"]      = item.get("type", "Azione")
-            parsed["yf_symbol"] = yf_sym
+            parsed["yf_symbol"] = sym
+            logger.info(f"Portfolio: {sym} → prezzo {parsed.get('price')}")
         else:
-            logger.warning(f"Dati non trovati per {yf_sym} (candidati: {candidates})")
+            logger.warning(f"Portfolio: dati non trovati per '{sym}'")
             parsed = {
-                "symbol": yf_sym.split(".")[0], "yf_symbol": yf_sym,
-                "name": item.get("name", yf_sym), "type": item.get("type", "Azione"),
+                "symbol": ticker, "yf_symbol": sym,
+                "name": item.get("name", sym), "type": item.get("type", "Azione"),
                 "price": None, "rsi": None, "trend": "n.d.",
                 "macd_str": "n.d.", "macd_hist": 0,
                 "perf_1m": None, "perf_3m": None,
@@ -458,8 +423,8 @@ Genera un JSON con questa struttura ESATTA (solo JSON puro, zero markdown):
   "sintesi_portafoglio": "2-3 frasi di sintesi operativa"
 }}
 Rating: Forte o Moderato. Segnale: Accumula, Mantieni o Riduci.
-Usa il campo symbol uguale al ticker TV (senza exchange prefix) per portfolio_analysis.
-Per qualsiasi ETF a leva (es. LBRT.MI) menziona sempre il rischio decay da leva giornaliera."""
+Usa il campo symbol uguale al ticker TV per portfolio_analysis (es. "OMER", "PANW", "MIL:SMH").
+Per qualsiasi ETF a leva menziona sempre il rischio decay da leva giornaliera."""
 
     msg = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -568,9 +533,12 @@ def etf_rows(lst, analysis_map):
 def portfolio_rows(portfolio, analysis_map):
     rows = ""
     for p in portfolio:
-        # Claude risponde con yf_symbol (es. "OMER.MI"), non il ticker TV (es. "OMER")
+        # yf_symbol ora è in formato TV (es. "MIL:OMER" o "PANW")
+        # Claude risponde con il ticker senza prefisso exchange (es. "OMER")
+        # → prova prima la chiave piena, poi il ticker nudo
         sym_key = p.get("yf_symbol", p.get("symbol", ""))
-        a = analysis_map.get(sym_key, {})
+        bare_key = sym_key.split(":")[-1] if ":" in sym_key else sym_key
+        a = analysis_map.get(sym_key) or analysis_map.get(bare_key, {})
         trend = p.get("trend", "n.d.")
         trend_color = {
             "Rialzista": "#16a34a", "Rialzista (>EMA200)": "#15803d",
@@ -985,9 +953,10 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       var symbols = data && data.symbols ? data.symbols : (Array.isArray(data) ? data : []);
       return symbols.slice(0, 15).map(function(s) {{
         var exch = s.exchange || s.listed_exchange || "";
-        var yfsym = tvToYahoo(s.symbol || "", exch);
+        var ticker = s.symbol || "";
+        var tvSym = (exch && ticker) ? exch + ":" + ticker : ticker;
         var tp = (s.type === "fund" || s.type === "dr" || s.type === "structured") ? "ETF" : "Azione";
-        return {{symbol: yfsym, shortname: s.description || s.symbol, exchDisp: exch,
+        return {{symbol: tvSym, shortname: s.description || s.symbol, exchDisp: exch,
                  quoteType: tp === "ETF" ? "ETF" : "EQUITY"}};
       }}).filter(function(s) {{ return s.symbol && s.symbol.length > 0; }});
     }}
@@ -1048,7 +1017,15 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   function addFromSearch(idx) {{
     var item = _searchResults[idx];
     if (!item) return;
-    var symbol = (item.symbol || "").toUpperCase();
+    var rawSym = (item.symbol || "").toUpperCase();
+    var exch   = (item.exchDisp || "").toUpperCase();
+    // Se il simbolo è in formato Yahoo (es. ENI.MI), converti in formato TV (MIL:ENI)
+    var symbol;
+    if (rawSym.indexOf(".") >= 0 && exch) {{
+      symbol = exch + ":" + rawSym.split(".")[0];
+    }} else {{
+      symbol = rawSym;
+    }}
     var name   = item.shortname || item.longname || symbol;
     var type   = guessType(item);
     hideDropdown();
