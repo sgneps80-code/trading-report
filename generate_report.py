@@ -492,6 +492,59 @@ def rating_badge(r):
     color = "#16a34a" if r == "Forte" else "#d97706"
     return f'<span style="color:{color};font-weight:700">● {r}</span>'
 
+def auto_comment(d):
+    """Commento sintetico automatico per ogni titolo, basato sui segnali calcolati."""
+    rsi    = d.get("rsi")      or 0
+    p1m    = d.get("perf_1m")  or 0
+    p3m    = d.get("perf_3m")  or 0
+    hist   = d.get("macd_hist") or 0
+    ema20  = d.get("ema20")    or 0
+    ema50  = d.get("ema50")    or 0
+    ema200 = d.get("ema200")   or 0
+    price  = d.get("price")    or 0
+
+    parts = []
+
+    # RSI
+    if rsi > 72:
+        parts.append(f"RSI {rsi:.0f} — zona ipercomprata, attenzione ai prezzi estesi")
+    elif rsi < 42:
+        parts.append(f"RSI {rsi:.0f} — ipervenduto, possibile rimbalzo")
+    else:
+        parts.append(f"RSI {rsi:.0f}")
+
+    # Performance
+    if p1m > 8:
+        parts.append(f"forte slancio mensile +{p1m:.1f}%")
+    elif p1m > 3:
+        parts.append(f"1M +{p1m:.1f}%")
+    elif p1m < -4:
+        parts.append(f"1M {p1m:.1f}% — pressione ribassista")
+    elif p1m < 0:
+        parts.append(f"1M {p1m:.1f}%")
+
+    # Struttura EMA
+    if price and ema20 and ema50 and ema200:
+        if price > ema20 > ema50 > ema200:
+            parts.append("trend allineato su tutti i timeframe")
+        elif price > ema20 > ema50 and (not ema200 or price < ema200):
+            parts.append("sopra EMA20/50, sotto EMA200")
+    elif price and ema20 and price < ema20:
+        parts.append("sotto EMA20 — struttura debole")
+
+    # MACD
+    if hist > 0:
+        parts.append("MACD positivo")
+    else:
+        parts.append("MACD negativo")
+
+    # Pattern
+    pat = detect_pattern(d)
+    if pat != "—":
+        parts.append(pat)
+
+    return ". ".join(parts[:4]) + "."
+
 def _composite_badge(label, color):
     return f'<span style="color:{color};font-weight:700;font-size:12px">{label}</span>'
 
@@ -590,7 +643,7 @@ def macd_badge(macd_str):
     if not macd_str or macd_str == "n.d.":
         return '<span style="color:#999">n.d.</span>'
     color = "#16a34a" if macd_str.startswith("↑") else "#dc2626"
-    return f'<span style="color:{color};font-size:12px;font-weight:600">{macd_str}</span>'
+    return f'<span style="color:{color};font-size:12px;font-weight:600;white-space:nowrap">{macd_str}</span>'
 
 def rec_badge(rec_str):
     """Badge TV Rec.All (aggregato 26 indicatori)."""
@@ -620,7 +673,7 @@ def stock_rows(lst, analysis_map):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
+            <td style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
         </tr>"""
     return rows
 
@@ -644,7 +697,7 @@ def etf_rows(lst, analysis_map):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
+            <td style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
         </tr>"""
     return rows
 
