@@ -1356,9 +1356,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }}
   th {{ background: #1e3a5f; color: white; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; }}
   td {{ padding: 8px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; white-space: nowrap; }}
-  td.wrap {{ white-space: normal; width: 180px; max-width: 180px; vertical-align: top; }}
-  td.wrap div {{ display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;font-size:12px;line-height:1.4; }}
-  td.wrap div:hover {{ -webkit-line-clamp:unset; }}
+  td.wrap {{ white-space: normal; width: 220px; max-width: 220px; min-width: 120px; vertical-align: top; overflow: hidden; }}
+  td.wrap div {{ display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;overflow-wrap:break-word;font-size:12px;line-height:1.4;max-width:220px; }}
+  td.wrap div:hover {{ -webkit-line-clamp:unset; cursor:help; }}
   tr:nth-child(even) {{ background: #f8fafc; }}
   tr:hover {{ background: #eef2ff; }}
   .badge-count {{ display: inline-block; background: #e2e8f0; color: #555; font-size: 11px; padding: 2px 8px; border-radius: 12px; margin-left: 8px; }}
