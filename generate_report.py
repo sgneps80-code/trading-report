@@ -385,32 +385,30 @@ def get_portfolio_data():
     return out
 
 # ─── INDICI DI MERCATO ────────────────────────────────────────────────────────
-INDICES_MAP = {
-    "S&P 500":      "^GSPC",
-    "NASDAQ":       "^IXIC",
-    "Eurostoxx 50": "^STOXX50E",
-    "FTSE MIB":     "FTSEMIB.MI",
+# Simboli TradingView per gli indici principali
+INDICES_TV = {
+    "S&P 500":      "SP:SPX",
+    "NASDAQ":       "NASDAQ:COMP",
+    "Eurostoxx 50": "TVC:SX5E",
+    "FTSE MIB":     "INDEX:FTSEMIB",
 }
 
 def get_indices():
-    """Recupera variazione % degli indici via Yahoo Finance JSON API (no libreria)."""
-    out = {}
-    syms = ",".join(INDICES_MAP.values())
+    """Recupera variazione % degli indici via TradingView screener (nessuna dipendenza da Yahoo)."""
+    out = {name: None for name in INDICES_TV}
     try:
-        url = f"https://query1.finance.yahoo.com/v7/finance/quote?symbols={syms}"
-        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
-        r.raise_for_status()
-        quotes = r.json().get("quoteResponse", {}).get("result", [])
-        by_sym = {v: k for k, v in INDICES_MAP.items()}
-        for q in quotes:
-            name = by_sym.get(q.get("symbol", ""))
-            chg  = q.get("regularMarketChangePercent")
+        syms = list(INDICES_TV.values())
+        data = tv_request("https://scanner.tradingview.com/global/scan",
+                          {"symbols": {"tickers": syms}, "columns": ["change"]})
+        by_tv = {v: k for k, v in INDICES_TV.items()}
+        for row in (data.get("data") or []):
+            s   = row.get("s", "")
+            chg = (row.get("d") or [None])[0]
+            name = by_tv.get(s)
             if name and chg is not None:
                 out[name] = round(chg, 2)
     except Exception as e:
-        logger.warning(f"Indices fetch: {e}")
-    for name in INDICES_MAP:
-        out.setdefault(name, None)
+        logger.warning(f"Indices TV fetch: {e}")
     return out
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
@@ -802,7 +800,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     # Contesto di mercato per Raccomandazione
     mkt_it = indices.get("FTSE MIB") or 0
     mkt_us = indices.get("S&P 500") or 0
-    mkt_eu = ((mkt_it + indices.get("Eurostoxx 50", 0)) / 2)
+    mkt_eu = ((mkt_it + (indices.get("Eurostoxx 50") or 0)) / 2)
 
     idx_html = "".join(
         f'<div class="idx-card"><div class="idx-name">{k}</div><div class="idx-val">{idx_badge(v)}</div></div>'
