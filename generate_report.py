@@ -492,6 +492,43 @@ def rating_badge(r):
     color = "#16a34a" if r == "Forte" else "#d97706"
     return f'<span style="color:{color};font-weight:700">● {r}</span>'
 
+def compute_score(r, market_delta=0):
+    """Score 0-10 composito: segnale + pattern + volume + contesto mercato."""
+    sig_label = compute_signal(r)[0]
+    pat_label = detect_pattern(r)
+
+    sig_pts = {
+        "🚀 Breakout": 3.0, "💪 Trend Forte": 2.5, "📈 Rialzista": 2.0,
+        "🔄 Rimbalzo": 1.5, "📣 Volume Spike": 1.5, "➡️ Laterale": 0.0,
+        "📊 Neutro": 0.0, "📉 Momentum ↓": -1.0, "⚠️ Ipercomprato": -0.5,
+    }.get(sig_label, 0)
+
+    pat_pts = {
+        "🔝 Breakout 52W": 2.0, "🚩 Flag Rialzista": 1.5,
+        "↩️ Pullback EMA20": 1.0, "🔁 Doppio Minimo?": 1.0,
+        "🛡️ Test Supporto": 0.5, "🔴 Resistenza": -1.0,
+        "⛰️ Doppio Picco?": -1.5,
+    }.get(pat_label, 0)
+
+    vol    = r.get("volume")  or 0
+    vol10d = r.get("vol_10d") or 1
+    vol_pts = 0.5 if (vol > vol10d * 2.5 and sig_pts > 0) else 0
+
+    mkt_pts = 0.5 if market_delta > 0 else (-0.5 if market_delta < 0 else 0)
+
+    score = sig_pts + pat_pts + vol_pts + mkt_pts
+    return max(0, min(10, score + 3))  # shift +3 per portare in range 0-10
+
+def raccomandazione_badge(score):
+    if score >= 5.5:
+        return '<span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span>'
+    elif score >= 3.5:
+        return '<span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span>'
+    elif score >= 1.5:
+        return '<span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span>'
+    else:
+        return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Evitare</span>'
+
 def auto_comment(d):
     """Commento sintetico automatico per ogni titolo, basato sui segnali calcolati."""
     rsi    = d.get("rsi")      or 0
@@ -654,7 +691,7 @@ def rec_badge(rec_str):
     c = colors.get(rec_str, "#888")
     return f'<span style="color:{c};font-size:12px;font-weight:700">● {rec_str}</span>'
 
-def stock_rows(lst, analysis_map):
+def stock_rows(lst, analysis_map, market_delta=0):
     if not lst:
         return '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (RSI 48-75, prezzo &gt; EMA20/50, MACD &gt; 0)</td></tr>'
     rows = ""
@@ -673,11 +710,12 @@ def stock_rows(lst, analysis_map):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
+            <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
+            <td class="wrap" style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
         </tr>"""
     return rows
 
-def etf_rows(lst, analysis_map):
+def etf_rows(lst, analysis_map, market_delta=0):
     if not lst:
         return '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px">Nessun ETF ha superato il filtro oggi</td></tr>'
     rows = ""
@@ -697,11 +735,12 @@ def etf_rows(lst, analysis_map):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
+            <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
+            <td class="wrap" style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
         </tr>"""
     return rows
 
-def portfolio_rows(portfolio, analysis_map):
+def portfolio_rows(portfolio, analysis_map, market_delta=0):
     rows = ""
     for p in portfolio:
         # yf_symbol ora è in formato TV (es. "MIL:OMER" o "PANW")
@@ -730,8 +769,9 @@ def portfolio_rows(portfolio, analysis_map):
             <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(p))}</td>
             <td style="font-size:12px">{detect_pattern(p)}</td>
+            <td>{raccomandazione_badge(compute_score(p, market_delta))}</td>
             <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
-            <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
+            <td class="wrap" style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
     return rows
 
@@ -758,6 +798,11 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     sm_us  = _analysis_map(analysis.get("stocks_us_analysis", []))
     em     = _analysis_map(analysis.get("etfs_analysis", []))
     pm     = _analysis_map(analysis.get("portfolio_analysis", []))
+
+    # Contesto di mercato per Raccomandazione
+    mkt_it = indices.get("FTSE MIB") or 0
+    mkt_us = indices.get("S&P 500") or 0
+    mkt_eu = ((mkt_it + indices.get("Eurostoxx 50", 0)) / 2)
 
     idx_html = "".join(
         f'<div class="idx-card"><div class="idx-name">{k}</div><div class="idx-val">{idx_badge(v)}</div></div>'
@@ -1312,7 +1357,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   .contesto {{ background: #f0f4f8; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; line-height: 1.7; color: #333; }}
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }}
   th {{ background: #1e3a5f; color: white; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; }}
-  td {{ padding: 10px 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }}
+  td {{ padding: 8px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; white-space: nowrap; }}
+  td.wrap {{ white-space: normal; min-width: 180px; vertical-align: top; }}
   tr:nth-child(even) {{ background: #f8fafc; }}
   tr:hover {{ background: #eef2ff; }}
   .badge-count {{ display: inline-block; background: #e2e8f0; color: #555; font-size: 11px; padding: 2px 8px; border-radius: 12px; margin-left: 8px; }}
@@ -1366,9 +1412,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
       </tr></thead>
-      <tbody>{stock_rows(stocks_it, sm_it)}</tbody>
+      <tbody>{stock_rows(stocks_it, sm_it, mkt_it)}</tbody>
     </table>
   </div>
 
@@ -1378,9 +1424,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
       </tr></thead>
-      <tbody>{stock_rows(stocks_us, sm_us)}</tbody>
+      <tbody>{stock_rows(stocks_us, sm_us, mkt_us)}</tbody>
     </table>
   </div>
 
@@ -1390,9 +1436,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if etfs else '<p class="empty-note">Nessun ETF ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th>
       </tr></thead>
-      <tbody>{etf_rows(etfs, em)}</tbody>
+      <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
   </div>
 
@@ -1401,9 +1447,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <h2>💼 Portafoglio — Analisi Tecnica</h2>
     <table>
       <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Operativo</th><th>Analisi</th>
+        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Operativo</th><th>Analisi</th>
       </tr></thead>
-      <tbody>{portfolio_rows(portfolio, pm)}</tbody>
+      <tbody>{portfolio_rows(portfolio, pm, (mkt_it + mkt_us) / 2)}</tbody>
     </table>
     <div class="sintesi"><strong>Sintesi operativa:</strong> {analysis.get('sintesi_portafoglio','')}</div>
   </div>
