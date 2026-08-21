@@ -10,8 +10,8 @@
   .header { background: linear-gradient(135deg, #1e3a5f, #2d5a8e); color: white; padding: 32px 40px; }
   .header h1 { font-size: 28px; font-weight: 700; }
   .header p { opacity: 0.75; margin-top: 6px; font-size: 14px; }
-  .container { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
-  .section { background: white; border-radius: 12px; padding: 28px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); }
+  .container { max-width: 1600px; margin: 0 auto; padding: 32px 24px; }
+  .section { background: white; border-radius: 12px; padding: 28px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); overflow-x: auto; }
   .section h2 { font-size: 18px; color: #1e3a5f; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }
   .idx-grid { display: flex; gap: 16px; flex-wrap: wrap; }
   .idx-card { background: #f0f4f8; border-radius: 8px; padding: 14px 20px; min-width: 140px; }
@@ -82,8 +82,8 @@
   <!-- CONTESTO DI MERCATO -->
   <div class="section">
     <h2>Contesto di Mercato</h2>
-    <div class="idx-grid"><div class="idx-card"><div class="idx-name">S&P 500</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.52%</span></div></div><div class="idx-card"><div class="idx-name">NASDAQ</div><div class="idx-val"><span style="color:#999">n.d.</span></div></div><div class="idx-card"><div class="idx-name">Eurostoxx 50</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.63%</span></div></div><div class="idx-card"><div class="idx-name">FTSE MIB</div><div class="idx-val"><span style="color:#999">n.d.</span></div></div></div>
-    <div class="contesto">Il sentiment globale rimane positivo con S&P 500 e Eurostoxx 50 in territorio di guadagno moderato (+0.52% e +0.63%). Tuttavia, il quadro tecnico del portafoglio di Stefano mostra divergenze significative: mentre i momentum rialzisti dominano lo screener (tutti gli asset analizzati con MACD ↑), le raccomandazioni aggregate di TradingView rimangono prevalentemente Neutre, segnalando prudenza nei livelli di valutazione attuali.</div>
+    <div class="idx-grid"><div class="idx-card"><div class="idx-name">S&P 500</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.48%</span></div></div><div class="idx-card"><div class="idx-name">NASDAQ</div><div class="idx-val"><span style="color:#999">n.d.</span></div></div><div class="idx-card"><div class="idx-name">Eurostoxx 50</div><div class="idx-val"><span style="color:#16a34a;font-weight:700">+0.63%</span></div></div><div class="idx-card"><div class="idx-name">FTSE MIB</div><div class="idx-val"><span style="color:#999">n.d.</span></div></div></div>
+    <div class="contesto">Sentiment globale positivo con S&P 500 e Eurostoxx 50 in rialzo modesto. La prevalenza di MACD rialzisti su screener suggerisce momentum costruttivo, tuttavia tutte le raccomandazioni TV rimangono Neutro, indicando cautela sui massimi raggiunti e necessità di conferme. Mercati in fase di consolidamento con possibili prese di profitto su titoli a performance elevate.</div>
   </div>
 
   <!-- TOP 10 AZIONI ITALIANE -->
@@ -107,7 +107,7 @@
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
-            <td class="wrap"><div style="color:#444">Adventure SpA presenta MACD rialzista con performance 1M del +47.4% ma RSI già elevato (66.4) e TV Rec Neutro suggeriscono consolidamento. Possibile ritracciamento tecnico dopo il forte rally.</div></td>
+            <td class="wrap"><div style="color:#444">Momentum rialzista confermato da MACD ↑ con RSI 66.4 in zona di forza senza ipercomprato. Performance 1M 47.4% solida. TV Rec Neutro suggerisce attendere ritracciamenti per entry ottimali, ma trend tecnico rimane supportivo.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">2</td>
             <td><strong>HIK</strong><br><span style="color:#888;font-size:11px">Haiki+ S.P.A.</span></td>
@@ -121,7 +121,7 @@
             <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
             <td style="font-size:12px">🔴 Resistenza</td>
             <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
-            <td class="wrap"><div style="color:#444">Haiki+ mostra MACD ↑ con RSI molto esteso (81.7) e +44.8% in 1M, segnali tipici di ipercomprato. La TV Rec Neutro conferma assenza di nuove forze direzionali, rischio di correzione significativa.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 81.7 indica ipercomprato significativo nonostante MACD ↑ rialzista. Gain 1M 44.8% importante già realizzato. TV Rec Neutro con RSI in zona critica: alto rischio correzione imminente.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">3</td>
             <td><strong>1PLTR</strong><br><span style="color:#888;font-size:11px">Palantir Technologies Inc. Class A</span></td>
@@ -149,7 +149,7 @@
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
-            <td class="wrap"><div style="color:#444">Finanza.tech presenta momentum rialzista (MACD ↑) con performance sostenuta (+30.2% 1M) e RSI moderato (60.1). TV Rec Neutro suggerisce di attendere break out confermato prima di entry aggressiva.</div></td>
+            <td class="wrap"><div style="color:#444">MACD ↑ rialzista su base consolidata (performance 1M 30.2%) con RSI 60.1 in zona equilibrio. Titolo micro-cap con liquidità potenzialmente limitata. TV Rec Neutro appropriato: attendere segnali di rottura.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">5</td>
             <td><strong>ECK</strong><br><span style="color:#888;font-size:11px">Ecosuntek S.p.A.</span></td>
@@ -248,122 +248,38 @@
       </tr></thead>
       <tbody><tr>
             <td style="color:#999;font-size:12px">1</td>
-            <td><strong>MRNA</strong><br><span style="color:#888;font-size:11px">Moderna, Inc.</span></td>
-            <td>149.51</td>
-            <td>72.3</td>
-            <td><span style="color:#16a34a;font-weight:600">+172.7%</span></td>
-            <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
-            <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">Moderna con MACD rialzista ma RSI 72.3 indica ipercomprato dopo rally esplosivo (+172.7% 1M). TV Rec Neutro nonostante momentum positivo evidenzia profitti realizzati e possibile volatilità di correzione.</div></td>
-        </tr><tr>
-            <td style="color:#999;font-size:12px">2</td>
-            <td><strong>QMCO</strong><br><span style="color:#888;font-size:11px">Quantum Corporation</span></td>
-            <td>20.45</td>
-            <td>62.3</td>
-            <td><span style="color:#16a34a;font-weight:600">+92.2%</span></td>
-            <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#dc2626;font-size:12px">Hanging Man ▼</span></td>
-            <td><span style="color:#dc2626;font-size:12px">Bearish</span></td>
-            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
-            <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">Quantum Corporation mostra MACD rialzista con performance 1M del +92.2% ma RSI 62.3 non al limite. TV Rec Neutro con momentum positivo offre setup interessante per position sizing conservativo.</div></td>
-        </tr><tr>
-            <td style="color:#999;font-size:12px">3</td>
-            <td><strong>SCZM</strong><br><span style="color:#888;font-size:11px">Santacruz Silver Mining Ltd.</span></td>
-            <td>9.89</td>
-            <td>72.9</td>
-            <td><span style="color:#16a34a;font-weight:600">+53.1%</span></td>
+            <td><strong>XGN</strong><br><span style="color:#888;font-size:11px">Exagen Inc.</span></td>
+            <td>7.95</td>
+            <td>78.4</td>
+            <td><span style="color:#16a34a;font-weight:600">+75.5%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
-            <td><span style="color:#888;font-size:12px">Neutro</span></td>
-            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
-            <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 73 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +53.1%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
-        </tr><tr>
-            <td style="color:#999;font-size:12px">4</td>
-            <td><strong>FDMT</strong><br><span style="color:#888;font-size:11px">4D Molecular Therapeutics, Inc.</span></td>
-            <td>15.70</td>
-            <td>72.5</td>
-            <td><span style="color:#16a34a;font-weight:600">+54.2%</span></td>
-            <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#888;font-size:12px">Neutro</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
-            <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 72 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +54.2%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
-        </tr><tr>
-            <td style="color:#999;font-size:12px">5</td>
-            <td><strong>SLS</strong><br><span style="color:#888;font-size:11px">SELLAS Life Sciences Group, Inc.</span></td>
-            <td>14.91</td>
-            <td>67.8</td>
-            <td><span style="color:#16a34a;font-weight:600">+49.0%</span></td>
-            <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
-            <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 68. forte slancio mensile +49.0%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
-        </tr><tr>
-            <td style="color:#999;font-size:12px">6</td>
-            <td><strong>AVAH</strong><br><span style="color:#888;font-size:11px">Aveanna Healthcare Holdings Inc.</span></td>
-            <td>13.53</td>
-            <td>80.1</td>
-            <td><span style="color:#16a34a;font-weight:600">+44.0%</span></td>
-            <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
             <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
             <td style="font-size:12px">🔴 Resistenza</td>
             <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
-            <td class="wrap"><div style="color:#444">RSI 80 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +44.0%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 78.4 in ipercomprato severo con MACD ↑ rialzista, performance 1M 75.5% impressionante ma insostenibile. TV Rec Neutro riflette rischio correzione elevato. Consolidamento necessario prima nuovi acquisti.</div></td>
         </tr><tr>
-            <td style="color:#999;font-size:12px">7</td>
-            <td><strong>GLGDF</strong><br><span style="color:#888;font-size:11px">GoGold Resources, Inc.</span></td>
-            <td>3.02</td>
-            <td>72.2</td>
-            <td><span style="color:#16a34a;font-weight:600">+46.8%</span></td>
+            <td style="color:#999;font-size:12px">2</td>
+            <td><strong>REAX</strong><br><span style="color:#888;font-size:11px">The Real Brokerage, Inc.</span></td>
+            <td>2.73</td>
+            <td>75.6</td>
+            <td><span style="color:#16a34a;font-weight:600">+70.3%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
-            <td><span style="color:#888;font-size:12px">Neutro</span></td>
-            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
-            <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 72 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +46.8%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
-        </tr><tr>
-            <td style="color:#999;font-size:12px">8</td>
-            <td><strong>PLTR</strong><br><span style="color:#888;font-size:11px">Palantir Technologies Inc.</span></td>
-            <td>180.42</td>
-            <td>69.6</td>
-            <td><span style="color:#16a34a;font-weight:600">+46.6%</span></td>
-            <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
-            <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
-            <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
+            <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
             <td style="font-size:12px">—</td>
-            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">Palantir Technologies presenta MACD ↑ coerente con performance 1M +46.6% e RSI moderato (69.6). TV Rec Neutro suggerisce consolidamento; possibile accumulo su ritracciamenti brevi.</div></td>
+            <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
+            <td class="wrap"><div style="color:#444">RSI 76 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +70.3%. MACD positivo.</div></td>
         </tr><tr>
-            <td style="color:#999;font-size:12px">9</td>
-            <td><strong>CLYM</strong><br><span style="color:#888;font-size:11px">Climb Bio, Inc.</span></td>
-            <td>17.50</td>
-            <td>75.2</td>
-            <td><span style="color:#16a34a;font-weight:600">+47.1%</span></td>
+            <td style="color:#999;font-size:12px">3</td>
+            <td><strong>CSTE</strong><br><span style="color:#888;font-size:11px">Caesarstone Ltd.</span></td>
+            <td>3.56</td>
+            <td>77.7</td>
+            <td><span style="color:#16a34a;font-weight:600">+70.3%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
@@ -371,21 +287,105 @@
             <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
-            <td class="wrap"><div style="color:#444">RSI 75 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +47.1%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 78 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +70.3%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
         </tr><tr>
-            <td style="color:#999;font-size:12px">10</td>
-            <td><strong>HL</strong><br><span style="color:#888;font-size:11px">Hecla Mining Company</span></td>
-            <td>20.91</td>
-            <td>71.6</td>
-            <td><span style="color:#16a34a;font-weight:600">+48.1%</span></td>
+            <td style="color:#999;font-size:12px">4</td>
+            <td><strong>ARX</strong><br><span style="color:#888;font-size:11px">Accelerant Holdings</span></td>
+            <td>19.58</td>
+            <td>76.8</td>
+            <td><span style="color:#16a34a;font-weight:600">+64.8%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
+            <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
+            <td style="font-size:12px">🔴 Resistenza</td>
+            <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
+            <td class="wrap"><div style="color:#444">MACD ↑ rialzista su prezzo 19.58 con RSI 76.8 in territorio saturo. Gain 1M 64.8% significativo già prezzato. TV Rec Neutro: attendere pullback su EMA per entry a rischio ridotto.</div></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">5</td>
+            <td><strong>ELMT</strong><br><span style="color:#888;font-size:11px">The Elmet Group Co.</span></td>
+            <td>20.42</td>
+            <td>66.5</td>
+            <td><span style="color:#16a34a;font-weight:600">+46.8%</span></td>
+            <td><span style="color:#999">n.d.</span></td>
+            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
+            <td><span style="color:#7c3aed;font-weight:700;font-size:12px">📣 Volume Spike</span></td>
+            <td style="font-size:12px">—</td>
+            <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
+            <td class="wrap"><div style="color:#444">RSI 66. forte slancio mensile +46.8%. MACD positivo.</div></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">6</td>
+            <td><strong>ABOS</strong><br><span style="color:#888;font-size:11px">Acumen Pharmaceuticals, Inc.</span></td>
+            <td>3.20</td>
+            <td>80.1</td>
+            <td><span style="color:#16a34a;font-weight:600">+48.8%</span></td>
+            <td><span style="color:#999">n.d.</span></td>
+            <td><span style="color:#888;font-size:12px">Doji</span></td>
+            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
+            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
+            <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
+            <td style="font-size:12px">—</td>
+            <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
+            <td class="wrap"><div style="color:#444">RSI 80 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +48.8%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">7</td>
+            <td><strong>AMR</strong><br><span style="color:#888;font-size:11px">Alpha Metallurgical Resources, Inc.</span></td>
+            <td>204.96</td>
+            <td>80.5</td>
+            <td><span style="color:#16a34a;font-weight:600">+49.4%</span></td>
+            <td><span style="color:#999">n.d.</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
+            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
+            <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
+            <td style="font-size:12px">—</td>
+            <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
+            <td class="wrap"><div style="color:#444">RSI 80 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +49.4%. MACD positivo.</div></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">8</td>
+            <td><strong>HZO</strong><br><span style="color:#888;font-size:11px">MarineMax, Inc. (FL)</span></td>
+            <td>52.20</td>
+            <td>81.7</td>
+            <td><span style="color:#16a34a;font-weight:600">+51.5%</span></td>
+            <td><span style="color:#999">n.d.</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
+            <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
+            <td style="font-size:12px">🔴 Resistenza</td>
+            <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
+            <td class="wrap"><div style="color:#444">RSI 82 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +51.5%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">9</td>
+            <td><strong>SLS</strong><br><span style="color:#888;font-size:11px">SELLAS Life Sciences Group, Inc.</span></td>
+            <td>14.83</td>
+            <td>67.4</td>
+            <td><span style="color:#16a34a;font-weight:600">+48.2%</span></td>
+            <td><span style="color:#999">n.d.</span></td>
+            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
             <td><span style="color:#15803d;font-weight:700;font-size:12px">🚀 Breakout</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 72. forte slancio mensile +48.1%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 67. forte slancio mensile +48.2%. trend allineato su tutti i timeframe. MACD positivo.</div></td>
+        </tr><tr>
+            <td style="color:#999;font-size:12px">10</td>
+            <td><strong>WIX</strong><br><span style="color:#888;font-size:11px">Wix.com Ltd.</span></td>
+            <td>83.95</td>
+            <td>72.6</td>
+            <td><span style="color:#16a34a;font-weight:600">+52.6%</span></td>
+            <td><span style="color:#999">n.d.</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
+            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
+            <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
+            <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
+            <td style="font-size:12px">🔴 Resistenza</td>
+            <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
+            <td class="wrap"><div style="color:#444">Momentum positivo confermato da MACD ↑ con RSI 72.6 in zona forza ma non estremo. Performance 1M 52.6% robusta. TV Rec Neutro su base tecnica solida suggerisce accumulo su dips.</div></td>
         </tr></tbody>
     </table>
   </div>
@@ -401,10 +401,10 @@
       <tbody><tr>
             <td style="color:#999;font-size:12px">1</td>
             <td><strong>XHG</strong></td>
-            <td style="color:#6366f1;font-size:13px">Tecnologia - High Growth</td>
-            <td>4.27</td>
-            <td>80.7</td>
-            <td><span style="color:#16a34a;font-weight:600">+349.4%</span></td>
+            <td style="color:#6366f1;font-size:13px">Tecnologia</td>
+            <td>4.26</td>
+            <td>80.5</td>
+            <td><span style="color:#16a34a;font-weight:600">+348.9%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#888;font-size:12px">Doji</span></td>
@@ -412,22 +412,22 @@
             <td><span style="color:#b45309;font-weight:700;font-size:12px">⚠️ Ipercomprato</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span></td>
-            <td class="wrap"><div style="color:#444">XChange TEC.INC con MACD ↑ mostra performance straordinaria (+349.4% 1M) ma RSI 80.7 estremamente esteso. AVVERTENZA: verificare composizione e rischi di concentrazione; TV Rec Neutro segnala possibile pullback.</div></td>
+            <td class="wrap"><div style="color:#444">Performance 1M straordinaria 348.9% con RSI 80.5 ipercomprato e MACD ↑ rialzista. ATTENZIONE: verificare struttura leva giornaliera - decay significativo su orizzonti medio-lunghi. Speculativo puro, adatto solo trading tattico.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">2</td>
             <td><strong>MRNX</strong></td>
-            <td style="color:#6366f1;font-size:13px">Tematico</td>
-            <td>92.70</td>
-            <td>63.3</td>
-            <td><span style="color:#16a34a;font-weight:600">+282.0%</span></td>
+            <td style="color:#6366f1;font-size:13px">Biotech Leveraged</td>
+            <td>90.79</td>
+            <td>62.9</td>
+            <td><span style="color:#16a34a;font-weight:600">+274.1%</span></td>
             <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 63. forte slancio mensile +282.0%. MACD positivo.</div></td>
+            <td class="wrap"><div style="color:#444">ETF 2X Long su MRNA con performance 1M 274.1%, RSI 62.9 moderato e MACD ↑ rialzista. AVVERTENZA CRITICA: rischio decay giornaliero elevato su posizioni multi-day. Idoneo solo per trading intraday/swing tattico con stop loss rigorosi.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">3</td>
             <td><strong>YJ</strong></td>
@@ -447,9 +447,9 @@
             <td style="color:#999;font-size:12px">4</td>
             <td><strong>TEMT</strong></td>
             <td style="color:#6366f1;font-size:13px">Tematico</td>
-            <td>33.30</td>
-            <td>74.6</td>
-            <td><span style="color:#16a34a;font-weight:600">+150.0%</span></td>
+            <td>33.12</td>
+            <td>74.4</td>
+            <td><span style="color:#16a34a;font-weight:600">+148.7%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
@@ -457,22 +457,22 @@
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">🔴 Resistenza</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
-            <td class="wrap"><div style="color:#444">RSI 75 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +150.0%. sopra EMA20/50, sotto EMA200. MACD positivo.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 74 — zona ipercomprata, attenzione ai prezzi estesi. forte slancio mensile +148.7%. sopra EMA20/50, sotto EMA200. MACD positivo.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">5</td>
             <td><strong>GDXU</strong></td>
-            <td style="color:#6366f1;font-size:13px">Oro e Minerali - 3X Leva</td>
-            <td>185.42</td>
-            <td>74.4</td>
-            <td><span style="color:#16a34a;font-weight:600">+147.2%</span></td>
+            <td style="color:#6366f1;font-size:13px">Oro / Mineraria 3X Leveraged</td>
+            <td>184.68</td>
+            <td>74.3</td>
+            <td><span style="color:#16a34a;font-weight:600">+146.2%</span></td>
             <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#888;font-size:12px">Doji</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">🔴 Resistenza</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
-            <td class="wrap"><div style="color:#444">MicroSectors Gold Miners 3x Leveraged con MACD rialzista e performance +147.2% 1M riflette rally metallico. AVVERTENZA DECAY: ETN a leva 3X espone a decadimento giornaliero in mercati sideways; ideale solo per holding brevissimo termine. TV Rec Neutro.</div></td>
+            <td class="wrap"><div style="color:#444">Leva 3X su Gold Miners con RSI 74.3 e MACD ↑ rialzista, performance 1M 146.2%. RISCHIO DECAY MASSIMO su holding prolungati - decadimento temporale giornaliero severo. Solo per trader esperti con posizioni < 5 giorni.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">6</td>
             <td><strong>GD3</strong></td>
@@ -492,17 +492,17 @@
             <td style="color:#999;font-size:12px">7</td>
             <td><strong>MRNY</strong></td>
             <td style="color:#6366f1;font-size:13px">Tematico</td>
-            <td>35.31</td>
-            <td>70.9</td>
-            <td><span style="color:#16a34a;font-weight:600">+145.2%</span></td>
+            <td>35.10</td>
+            <td>70.8</td>
+            <td><span style="color:#16a34a;font-weight:600">+143.8%</span></td>
             <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#16a34a;font-size:12px;font-weight:600;white-space:nowrap">↑ Rialzista</span></td>
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">RSI 71. forte slancio mensile +145.2%. MACD positivo.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 71. forte slancio mensile +143.8%. MACD positivo.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">8</td>
             <td><strong>FGRU</strong></td>
@@ -521,10 +521,10 @@
         </tr><tr>
             <td style="color:#999;font-size:12px">9</td>
             <td><strong>PLTU</strong></td>
-            <td style="color:#6366f1;font-size:13px">Tecnologia - 2X Leva Direzionale</td>
-            <td>54.12</td>
+            <td style="color:#6366f1;font-size:13px">Tematico</td>
+            <td>54.16</td>
             <td>68.1</td>
-            <td><span style="color:#16a34a;font-weight:600">+99.6%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+99.8%</span></td>
             <td><span style="color:#999">n.d.</span></td>
             <td><span style="color:#16a34a;font-size:12px">Bullish</span></td>
             <td><span style="color:#888;font-size:12px">Neutro</span></td>
@@ -532,7 +532,7 @@
             <td><span style="color:#059669;font-weight:700;font-size:12px">📈 Rialzista</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
-            <td class="wrap"><div style="color:#444">Direxion Daily PLTR Bull 2X presenta MACD ↑ e performance +99.6% 1M in linea con sottostante rialzista. AVVERTENZA DECAY: leva 2X espone a drift negativo in range-bound markets; migliore in trend chiari. TV Rec Neutro richiede cautela.</div></td>
+            <td class="wrap"><div style="color:#444">RSI 68. forte slancio mensile +99.8%. MACD positivo.</div></td>
         </tr><tr>
             <td style="color:#999;font-size:12px">10</td>
             <td><strong>NEMG</strong></td>
@@ -574,23 +574,23 @@
             <td style="font-size:12px">—</td>
             <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
             <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
-            <td class="wrap"><div style="color:#444">Leva Fissa OIL Long 4X conferma trend rialzista con MACD ↑ e performance +13.9% 1M in linea con WTI. RSI moderato (64.1) permette ulteriori apprezzamenti. AVVERTENZA: leva 4X comporta decay significativo; considerare consolidamento parziale su spikes.</div></td>
+            <td class="wrap"><div style="color:#444">Leva 4X Oil Long con MACD ↑ rialzista, trend > EMA200 e performance 1M 13.9% solida. RSI 64.1 equilibrato senza ipercomprato. Monitorare chiusure giornaliere su EMA200; decay leva giornaliera presente - adatto solo holding 1-3 settimane max.</div></td>
         </tr><tr>
             <td><strong>Palo Alto Networks</strong><br><span style="color:#999;font-size:11px">NASDAQ:PANW</span></td>
             <td style="font-size:12px;color:#666">Azione</td>
-            <td>356.64</td>
-            <td>51.1</td>
+            <td>357.34</td>
+            <td>51.4</td>
             <td style="color:#d97706;font-weight:600;font-size:12px">Laterale</td>
-            <td><span style="color:#16a34a;font-weight:600">+7.5%</span></td>
+            <td><span style="color:#16a34a;font-weight:600">+7.7%</span></td>
             <td><span style="color:#999">n.d.</span></td>
-            <td><span style="color:#16a34a;font-size:12px">Hammer ▲</span></td>
+            <td><span style="color:#888;font-size:12px">Neutro</span></td>
             <td><span style="color:#dc2626;font-size:12px">Bearish</span></td>
             <td><span style="color:#dc2626;font-size:12px;font-weight:600;white-space:nowrap">↓ Ribassista</span></td>
             <td><span style="color:#6b7280;font-weight:700;font-size:12px">📊 Neutro</span></td>
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td class="wrap"><div style="color:#444">Palo Alto Networks presenta segnali di debolezza con MACD ↓ ribassista e trend laterale malgrado RSI 51.1 neutro. TV Rec Neutro su performance modesta (+7.5% 1M) suggerisce rotazione verso settori momentum positivi. Consigliabile reindirizzare capitali.</div></td>
+            <td class="wrap"><div style="color:#444">MACD ↓ ribassista confermato con trend laterale e RSI 51.4 neutro. Performance 1M 7.7% deludente vs. peers tech. TV Rec Neutro ma divergenza bearish: uscire su rimbalzi tattico verso 360-365 per realizzare perdite limitate.</div></td>
         </tr><tr>
             <td><strong>Omer</strong><br><span style="color:#999;font-size:11px">MIL:OMER</span></td>
             <td style="font-size:12px;color:#666">Azione</td>
@@ -606,7 +606,7 @@
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td class="wrap"><div style="color:#444">Omer mostra deterioramento tecnico con MACD ↓ ribassista, trend ribassista e RSI 43.7 debole. Performance -0.6% 1M in contesto rialzista globale evidenzia underperformance strutturale. TV Rec Neutro non giustifica permanenza.</div></td>
+            <td class="wrap"><div style="color:#444">Trend ribassista confermato da MACD ↓ ribassista, RSI 43.7 debole e performance negativa 1M -0.6%. Posizionamento deteriorato. TV Rec Neutro ma contesto tecnico avverso: valutare exit su supporti per ridurre esposizione.</div></td>
         </tr><tr>
             <td><strong>WisdomTree Physical Gold EUR Hdg</strong><br><span style="color:#999;font-size:11px">GBSE</span></td>
             <td style="font-size:12px;color:#666">ETC</td>
@@ -622,7 +622,7 @@
             <td style="font-size:12px">—</td>
             <td><span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span></td>
             <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
-            <td class="wrap"><div style="color:#444">WisdomTree Physical Gold EUR Hedged conferma trend rialzista con MACD ↑ e performance +13.7% 1M. RSI 71.9 richiede monitoraggio per possibile consolidamento. Valida diversificazione defensive in contesto di leva elevata altrove.</div></td>
+            <td class="wrap"><div style="color:#444">WisdomTree Gold Eur Hedged con MACD ↑ rialzista, trend > EMA200 e performance 1M 13.7% robusta. RSI 71.9 in forza senza eccesso. Defensive asset performante: mantenere per diversificazione e protezione inflazionistica.</div></td>
         </tr><tr>
             <td><strong>VanEck Semiconductor UCITS ETF</strong><br><span style="color:#999;font-size:11px">MIL:VVSM</span></td>
             <td style="font-size:12px;color:#666">ETF</td>
@@ -638,7 +638,7 @@
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td class="wrap"><div style="color:#444">VanEck Semiconductor UCITS presenta MACD ↓ ribassista con trend ribassista e RSI 43.7 debole. Malgrado sentiment tech rialzista, settore semiconduttori mostra debolezza relativa (+1.3% 1M). Ricalibrare verso PLTR/tech momentum.</div></td>
+            <td class="wrap"><div style="color:#444">Semiconduttori in trend ribassista confermato da MACD ↓ ribassista, RSI 43.7 debole e performance 1M solo 1.3%. Settore in underperformance vs. mercato. Uscire parzialmente e ruotare verso exposures rialziste.</div></td>
         </tr><tr>
             <td><strong>iShares STOXX Europe 600 UCITS ETF</strong><br><span style="color:#999;font-size:11px">MIL:EXSA</span></td>
             <td style="font-size:12px;color:#666">ETF</td>
@@ -654,7 +654,7 @@
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
             <td><span style="color:#d97706;font-weight:700">● Mantieni</span></td>
-            <td class="wrap"><div style="color:#444">iShares STOXX Europe 600 mostra trend rialzista (>EMA200) ma MACD divergenza ↓ su performance modesta (+1.1% 1M) segnala caution. Mantenere come core defensivo europeo, non aggiungere su livelli attuali.</div></td>
+            <td class="wrap"><div style="color:#444">Europe 600 UCITS con trend > EMA200 rialzista ma MACD ↓ ribassista divergente, RSI 56.6 neutro. Performance 1M 1.1% piatta. Divergenza tecnica preoccupante: mantenere ma preparare exit tattica su rottura sotto EMA200.</div></td>
         </tr><tr>
             <td><strong>LVMH</strong><br><span style="color:#999;font-size:11px">EURONEXT:MC</span></td>
             <td style="font-size:12px;color:#666">Azione</td>
@@ -670,10 +670,10 @@
             <td style="font-size:12px">—</td>
             <td><span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span></td>
             <td><span style="color:#dc2626;font-weight:700">● Riduci</span></td>
-            <td class="wrap"><div style="color:#444">LVMH presenta segnali critici con MACD ↓ ribassista, trend ribassista e RSI 40.9 debolissimo. Performance -4.8% 1M in contesto rialzista evidenzia trauma settoriale. Exit consigliato; profitti da altre posizioni potrebbero ribilanciare.</div></td>
+            <td class="wrap"><div style="color:#444">LVMH in trend ribassista netto, MACD ↓ ribassista, RSI 40.9 debole e performance 1M -4.8% negativa. Lusso sottoperforma. TV Rec Neutro ma contesto tecnico deteriorato: ridurre posizione su rimbalzi e attendere segnali di bottom prima rientrata.</div></td>
         </tr></tbody>
     </table>
-    <div class="sintesi"><strong>Sintesi operativa:</strong> Il portafoglio di Stefano è disallineato rispetto al sentiment dominante: tre posizioni mostrano segnali ribassisti critici (PANW, OMER, MC, VVSM) mentre solo LBRT e GBSE beneficiano di momentum positivo. Pur mantenendo esposizione a leva sull'oil (LBRT), è urgente ricalibrare verso settori con MACD ↑ confermato (PLTR, settori tech/growth) e chiudere underperformer strutturali. La diversificazione europea (EXSA, LVMH) richiede revisione prioritaria; si consiglia rotazione tattica verso ETF leveraged a tema minerali/metalli preziosi per sfruttare momentum corrente, con attento monitoraggio del rischio decay.</div>
+    <div class="sintesi"><strong>Sintesi operativa:</strong> Portafoglio di Stefano mostra divergenze critiche: posizioni rialziste (LBRT, GBSE) performano bene con MACD ↑, mentre core positions tecnologiche (PANW, VVSM, MC) soffrono MACD ↓ ribassista e trend negativi. Raccomandazione: ridurre titoli in ribasso (PANW, OMER, VVSM, MC), mantenere hedge oro, e ribilanciare verso ETF con MACD ↑ ma evitare leva 3-4X su holding > 5 giorni (decay massimo). Sentiment TV universalmente Neutro suggerisce prudenza su nuove entry ai massimi.</div>
   </div>
 
   <!-- AGGIORNA PORTAFOGLIO -->
@@ -769,7 +769,7 @@
       Le decisioni di investimento sono responsabilità esclusiva dell'investitore.
       I dati tecnici sono calcolati su prezzi storici di chiusura e potrebbero non riflettere le quotazioni in tempo reale.
     </p>
-    <p class="gen-time">Generato il 21/08/2026 17:27 UTC</p>
+    <p class="gen-time">Generato il 21/08/2026 17:32 UTC</p>
   </div>
 
 </div>
