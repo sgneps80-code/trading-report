@@ -57,6 +57,10 @@ TV_COLS = [
     "high|1W",                  # massimo settimanale
     "low|1W",                   # minimo settimanale
     "close|1W",                 # chiusura settimanale
+    "High.3M",                  # massimo 3 mesi (pattern detection)
+    "Low.3M",                   # minimo 3 mesi (pattern detection)
+    "52WkHigh",                 # massimo 52 settimane
+    "52WkLow",                  # minimo 52 settimane
 ]
 
 def detect_candle(o, h, l, c, prev_o=None, prev_c=None):
@@ -127,6 +131,10 @@ def parse_tv_row(row):
     rec    = d.get("Rec.All") or 0
     vol    = d.get("volume")                 or 0
     vol10d = d.get("average_volume_10d_calc") or 0
+    high3m = d.get("High.3M")  or 0
+    low3m  = d.get("Low.3M")   or 0
+    high52 = d.get("52WkHigh") or 0
+    low52  = d.get("52WkLow")  or 0
 
     # ── Candele giapponesi ──
     candle_d = detect_candle(o_day, h_day, l_day, price) if h_day and l_day else "—"
@@ -190,7 +198,15 @@ def parse_tv_row(row):
         "rec":        rec,
         "rec_str":    rec_str,
         "vol_ratio":  round(vol / vol10d, 2) if vol10d > 0 else None,
+        "volume":     vol,
+        "vol_10d":    vol10d,
+        "macd":       macd,
+        "macd_sig":   sig,
         "market_cap": d.get("market_cap_basic"),
+        "high_3m":    high3m,
+        "low_3m":     low3m,
+        "high_52w":   high52,
+        "low_52w":    low52,
     }
 
 def momentum_score(d):
@@ -476,6 +492,77 @@ def rating_badge(r):
     color = "#16a34a" if r == "Forte" else "#d97706"
     return f'<span style="color:{color};font-weight:700">● {r}</span>'
 
+def _composite_badge(label, color):
+    return f'<span style="color:{color};font-weight:700;font-size:12px">{label}</span>'
+
+def compute_signal(r):
+    """Segnale composito da RSI/EMA/MACD/momentum. Restituisce (label, colore)."""
+    price  = r.get("price")    or 0
+    rsi    = r.get("rsi")      or 50
+    hist   = r.get("macd_hist") or 0
+    ema20  = r.get("ema20")    or 0
+    ema50  = r.get("ema50")    or 0
+    ema200 = r.get("ema200")   or 0
+    p1m    = r.get("perf_1m")  or 0
+    p3m    = r.get("perf_3m")  or 0
+    vol    = r.get("volume")   or 0
+    vol10d = r.get("vol_10d")  or 1
+
+    if rsi > 75:
+        return ("⚠️ Ipercomprato", "#b45309")
+    if rsi < 42 and hist > 0 and price and ema20 and price > ema20:
+        return ("🔄 Rimbalzo", "#2563eb")
+    if price and ema20 and ema50 and ema200 and price > ema20 > ema50 > ema200 and hist > 0 and p1m > 4:
+        return ("🚀 Breakout", "#15803d")
+    if price and ema200 and price > ema200 and p1m > 5 and p3m > 12:
+        return ("💪 Trend Forte", "#16a34a")
+    if hist > 0 and p1m < -2:
+        return ("📉 Momentum ↓", "#dc2626")
+    if vol10d > 0 and vol > vol10d * 2.5 and hist > 0:
+        return ("📣 Volume Spike", "#7c3aed")
+    if abs(p1m) < 2 and abs(p3m) < 6:
+        return ("➡️ Laterale", "#6b7280")
+    if hist > 0:
+        return ("📈 Rialzista", "#059669")
+    return ("📊 Neutro", "#6b7280")
+
+def detect_pattern(r):
+    """Rileva pattern tecnici da massimi/minimi di periodo."""
+    price  = r.get("price")    or 0
+    h3m    = r.get("high_3m")  or 0
+    l3m    = r.get("low_3m")   or 0
+    h52    = r.get("high_52w") or 0
+    l52    = r.get("low_52w")  or 0
+    p1m    = r.get("perf_1m")  or 0
+    p3m    = r.get("perf_3m")  or 0
+    rsi    = r.get("rsi")      or 50
+    hist   = r.get("macd_hist") or 0
+    ema20  = r.get("ema20")    or 0
+
+    if not price:
+        return "—"
+
+    near_h3m = h3m and abs(price - h3m) / h3m < 0.03
+    near_l3m = l3m and abs(price - l3m) / l3m < 0.04
+    near_h52 = h52 and price > h52 * 0.97
+    near_l52 = l52 and price < l52 * 1.05
+
+    if near_h3m and p1m < -1 and rsi > 58:
+        return "⛰️ Doppio Picco?"
+    if near_l3m and p1m > 1 and hist > 0:
+        return "🔁 Doppio Minimo?"
+    if near_h52 and p1m > 3 and hist > 0:
+        return "🔝 Breakout 52W"
+    if near_l52 and hist > 0:
+        return "🛡️ Test Supporto"
+    if p3m > 18 and abs(p1m) < 4 and h3m and price > h3m * 0.88:
+        return "🚩 Flag Rialzista"
+    if ema20 and price and abs(price - ema20) / ema20 < 0.02 and hist > 0 and p3m > 8:
+        return "↩️ Pullback EMA20"
+    if near_h3m and rsi > 72:
+        return "🔴 Resistenza"
+    return "—"
+
 def signal_badge(s):
     colors = {"Accumula": "#16a34a", "Riduci": "#dc2626", "Mantieni": "#d97706"}
     c = colors.get(s, "#d97706")
@@ -531,8 +618,8 @@ def stock_rows(lst, analysis_map):
             <td>{candle_badge(d.get('candle_d','—'))}</td>
             <td>{candle_badge(d.get('candle_w','—'))}</td>
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
-            <td>{rec_badge(d.get('rec_str','Neutro'))}</td>
-            <td>{rating_badge(a.get('rating','Moderato'))}</td>
+            <td>{_composite_badge(*compute_signal(d))}</td>
+            <td style="font-size:12px">{detect_pattern(d)}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
     return rows
@@ -555,7 +642,8 @@ def etf_rows(lst, analysis_map):
             <td>{candle_badge(d.get('candle_d','—'))}</td>
             <td>{candle_badge(d.get('candle_w','—'))}</td>
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
-            <td>{rating_badge(a.get('rating','Moderato'))}</td>
+            <td>{_composite_badge(*compute_signal(d))}</td>
+            <td style="font-size:12px">{detect_pattern(d)}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
     return rows
@@ -587,7 +675,8 @@ def portfolio_rows(portfolio, analysis_map):
             <td>{candle_badge(p.get('candle_d','—'))}</td>
             <td>{candle_badge(p.get('candle_w','—'))}</td>
             <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
-            <td>{rec_badge(p.get('rec_str','Neutro'))}</td>
+            <td>{_composite_badge(*compute_signal(p))}</td>
+            <td style="font-size:12px">{detect_pattern(p)}</td>
             <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
             <td style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
         </tr>"""
@@ -1224,7 +1313,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>TV Rec.</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_it, sm_it)}</tbody>
     </table>
@@ -1236,7 +1325,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>TV Rec.</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_us, sm_us)}</tbody>
     </table>
@@ -1248,7 +1337,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if etfs else '<p class="empty-note">Nessun ETF ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Rating</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em)}</tbody>
     </table>
@@ -1259,7 +1348,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <h2>💼 Portafoglio — Analisi Tecnica</h2>
     <table>
       <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>TV Rec.</th><th>Segnale</th><th>Analisi</th>
+        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Operativo</th><th>Analisi</th>
       </tr></thead>
       <tbody>{portfolio_rows(portfolio, pm)}</tbody>
     </table>
