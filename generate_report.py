@@ -1345,8 +1345,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   .header {{ background: linear-gradient(135deg, #1e3a5f, #2d5a8e); color: white; padding: 32px 40px; }}
   .header h1 {{ font-size: 28px; font-weight: 700; }}
   .header p {{ opacity: 0.75; margin-top: 6px; font-size: 14px; }}
-  .container {{ max-width: 1200px; margin: 0 auto; padding: 32px 24px; }}
-  .section {{ background: white; border-radius: 12px; padding: 28px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); }}
+  .container {{ max-width: 1600px; margin: 0 auto; padding: 32px 24px; }}
+  .section {{ background: white; border-radius: 12px; padding: 28px; margin-bottom: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.07); overflow-x: auto; }}
   .section h2 {{ font-size: 18px; color: #1e3a5f; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }}
   .idx-grid {{ display: flex; gap: 16px; flex-wrap: wrap; }}
   .idx-card {{ background: #f0f4f8; border-radius: 8px; padding: 14px 20px; min-width: 140px; }}
