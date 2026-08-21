@@ -709,7 +709,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
             <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
-            <td class="wrap" style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
+            <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
         </tr>"""
     return rows
 
@@ -734,7 +734,7 @@ def etf_rows(lst, analysis_map, market_delta=0):
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
             <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
-            <td class="wrap" style="font-size:13px;color:#444">{a.get('motivazione') or auto_comment(d)}</td>
+            <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
         </tr>"""
     return rows
 
@@ -769,7 +769,7 @@ def portfolio_rows(portfolio, analysis_map, market_delta=0):
             <td style="font-size:12px">{detect_pattern(p)}</td>
             <td>{raccomandazione_badge(compute_score(p, market_delta))}</td>
             <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
-            <td class="wrap" style="font-size:13px;color:#444">{a.get('motivazione','')}</td>
+            <td class="wrap"><div style="color:#444">{a.get('motivazione','')}</div></td>
         </tr>"""
     return rows
 
@@ -1356,7 +1356,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   table {{ width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; }}
   th {{ background: #1e3a5f; color: white; padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 600; }}
   td {{ padding: 8px 10px; border-bottom: 1px solid #e2e8f0; vertical-align: middle; white-space: nowrap; }}
-  td.wrap {{ white-space: normal; min-width: 180px; vertical-align: top; }}
+  td.wrap {{ white-space: normal; width: 180px; max-width: 180px; vertical-align: top; }}
+  td.wrap div {{ display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word;font-size:12px;line-height:1.4; }}
+  td.wrap div:hover {{ -webkit-line-clamp:unset; }}
   tr:nth-child(even) {{ background: #f8fafc; }}
   tr:hover {{ background: #eef2ff; }}
   .badge-count {{ display: inline-block; background: #e2e8f0; color: #555; font-size: 11px; padding: 2px 8px; border-radius: 12px; margin-left: 8px; }}
