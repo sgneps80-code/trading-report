@@ -63,6 +63,8 @@ TV_COLS = [
     "52WkLow",                  # minimo 52 settimane
     "type",                     # tipo TV: stock / fund / structured / dr ...
     "typespecs",                # sottotipo: ["etf"], ["etn"], ["etc"], ["common"] ...
+    "expense_ratio",            # TER del fondo (per punteggio costo)
+    "aum",                      # masse gestite / assets under management
 ]
 
 def detect_candle(o, h, l, c, prev_o=None, prev_c=None):
@@ -139,6 +141,8 @@ def parse_tv_row(row):
     low52  = d.get("52WkLow")  or 0
     sec_type  = d.get("type")
     typespecs = d.get("typespecs") or []
+    ter       = d.get("expense_ratio")
+    aum       = d.get("aum")
 
     # ── Candele giapponesi ──
     candle_d = detect_candle(o_day, h_day, l_day, price) if h_day and l_day else "—"
@@ -213,6 +217,8 @@ def parse_tv_row(row):
         "low_52w":    low52,
         "sec_type":   sec_type,
         "typespecs":  typespecs,
+        "expense_ratio": ter,
+        "aum":        aum,
     }
 
 def momentum_score(d):
@@ -312,30 +318,119 @@ def _is_etp(r):
         return True
     return False
 
+# ── Eleggibilità e punteggio di convenienza per gli ETP ──
+def _passes_etp(r, min_price=1.0):
+    """Cancello morbido: liquidità + trend di fondo.
+    Niente stacking rigido delle EMA veloci (prezzo>EMA20>EMA50), che svuotava la lista:
+    gli ETP diversificati si muovono lenti e scendono spesso sotto la EMA20 nei ritracci."""
+    price = r.get("price") or 0
+    if price < min_price:
+        return False
+    # Liquidità in CONTROVALORE (prezzo × volume medio 10gg), non in numero di quote
+    vol10d = r.get("vol_10d") or 0
+    if price * vol10d < 50_000:            # ~50k della valuta base/giorno — tara sul tuo mercato
+        return False
+    # Trend di fondo: sopra EMA200 se disponibile, altrimenti sopra EMA50
+    ema50, ema200 = r.get("ema50") or 0, r.get("ema200") or 0
+    if ema200:
+        if price < ema200:
+            return False
+    elif ema50:
+        if price < ema50:
+            return False
+    else:
+        return False
+    # Escludi solo i downtrend recenti conclamati
+    if (r.get("perf_3m") or 0) < -5:
+        return False
+    return True
+
+def etp_score(r):
+    """Punteggio TECNICO (breve termine): trend + momentum + salute RSI, con freno ai blow-off."""
+    price  = r.get("price")     or 0
+    ema50  = r.get("ema50")     or 0
+    ema200 = r.get("ema200")    or 0
+    rsi    = r.get("rsi")       or 50
+    hist   = r.get("macd_hist") or 0
+    p1m    = r.get("perf_1m")   or 0
+    p3m    = r.get("perf_3m")   or 0
+
+    s = 0.0
+    # Struttura di trend
+    if ema200 and price > ema200:            s += 2.0
+    if ema50  and price > ema50:             s += 1.0
+    if ema50 and ema200 and ema50 > ema200:  s += 1.0   # golden alignment
+    # Momentum con rendimenti decrescenti (radice): non premia gli strappi estremi
+    s += (p3m ** 0.5 if p3m > 0 else 0) * 0.6
+    s += (p1m ** 0.5 if p1m > 0 else -abs(p1m) * 0.1)
+    # Conferma MACD
+    if hist > 0:
+        s += 1.0
+    # Salute RSI: premia 50-68, penalizza gli estremi
+    if   50 <= rsi <= 68: s += 1.0
+    elif 45 <= rsi < 50:  s += 0.3
+    elif rsi > 78:        s -= 1.0
+    elif rsi < 40:        s -= 0.5
+    return s
+
+def etp_cost_score(r):
+    """Punteggio COSTO/DIMENSIONE (strutturale): premia TER basso e masse gestite ampie.
+    NOTA: TradingView può esporre expense_ratio come percentuale (0.20 = 0,20%) o come
+    frazione (0.002). La normalizzazione qui sotto è un'euristica difensiva: verifica il
+    formato reale col log di debug in screen_etfs e, se serve, togli la riga di normalizzazione."""
+    ter = r.get("expense_ratio")
+    aum = r.get("aum") or 0
+    s = 0.0
+    if ter is not None:
+        ter_pct = ter * 100 if ter < 0.05 else ter    # euristica: <0.05 ⇒ probabilmente frazione
+        if   ter_pct <= 0.15: s += 2.0
+        elif ter_pct <= 0.30: s += 1.5
+        elif ter_pct <= 0.50: s += 1.0
+        elif ter_pct <= 0.75: s += 0.3
+        else:                 s -= 1.0    # >0,75%: tipico dei prodotti a leva
+    if   aum >= 500_000_000: s += 2.0
+    elif aum >= 100_000_000: s += 1.5
+    elif aum >=  20_000_000: s += 1.0
+    elif aum >=   5_000_000: s += 0.3
+    else:                    s -= 0.5     # troppo piccolo ⇒ rischio chiusura / spread ampio
+    return s
+
+def etp_total_score(r):
+    """Convenienza complessiva = tecnica (breve) + costo/dimensione (strutturale)."""
+    return etp_score(r) + etp_cost_score(r)
+
 def screen_etfs():
     logger.info("Screening ETF/ETN/ETC — TradingView (solo Borsa Italiana)...")
     payload = {
+        # Filtri API volutamente larghi: la selezione fine avviene in Python via
+        # _passes_etp (eleggibilità) + etp_total_score (ranking). Rimosso il gate
+        # MACD.hist>0 server-side, che tagliava fuori quasi tutti gli ETP a bassa volatilità.
         "filter": [
-            {"left": "RSI",                     "operation": "in_range", "right": [35, 82]},
-            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 5000},
-            {"left": "MACD.hist",               "operation": "greater",  "right": 0},
+            {"left": "RSI",                     "operation": "in_range", "right": [30, 85]},
+            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 3000},
         ],
         "options": {"lang": "en"},
         "markets": ["italy"],
         "symbols": {"query": {"types": ["fund", "structured"]}, "tickers": []},
         "columns": TV_COLS,
         "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
-        "range": [0, 200]
+        "range": [0, 300]
     }
     data = tv_request("https://scanner.tradingview.com/italy/scan", payload)
-    rows = [parse_tv_row(r) for r in (data.get("data") or [])]
-    rows = [
-        r for r in rows
-        if r.get("price") and _is_etp(r) and _passes_momentum(r, min_price=0.5, min_perf1m=0)
-    ]
-    rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"ETF/ETN/ETC Italia: {len(rows)} trovati → top {min(10, len(rows))}")
-    return rows[:10]
+    raw = [parse_tv_row(r) for r in (data.get("data") or [])]
+
+    # Imbuto diagnostico: mostra DOVE si perdono i candidati (utile per calibrare le soglie)
+    after_etp  = [r for r in raw if _is_etp(r)]
+    eligible   = [r for r in after_etp if r.get("price") and _passes_etp(r, min_price=1.0)]
+    logger.info(f"ETP funnel: raw={len(raw)} → is_etp={len(after_etp)} → eleggibili={len(eligible)}")
+    # Debug tassonomia/costi: scommenta per vedere cosa restituisce davvero l'API
+    # for r in after_etp[:20]:
+    #     logger.info(f"  {r['symbol']}: type={r.get('sec_type')} specs={r.get('typespecs')} "
+    #                 f"ter={r.get('expense_ratio')} aum={r.get('aum')}")
+
+    eligible.sort(key=etp_total_score, reverse=True)
+    logger.info(f"ETF/ETN/ETC Italia: {len(eligible)} eleggibili → top {min(10, len(eligible))}")
+    return eligible[:10]
 
 # ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
 
@@ -555,6 +650,41 @@ def raccomandazione_badge(score):
     else:
         return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Evitare</span>'
 
+def etp_reco_badge(score):
+    """Badge per la Rec. degli ETP, coerente con l'ordinamento (etp_total_score).
+    Soglie da calibrare sui dati reali dell'imbuto."""
+    if score >= 8.0:
+        return '<span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span>'
+    elif score >= 5.0:
+        return '<span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span>'
+    elif score >= 2.5:
+        return '<span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span>'
+    else:
+        return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Debole</span>'
+
+def fmt_ter(ter):
+    """Formatta il TER (Total Expense Ratio) con colore per fascia di costo."""
+    if ter is None:
+        return '<span style="color:#999">n.d.</span>'
+    ter_pct = ter * 100 if ter < 0.05 else ter    # stessa euristica di etp_cost_score
+    color = "#16a34a" if ter_pct <= 0.30 else ("#d97706" if ter_pct <= 0.75 else "#dc2626")
+    return f'<span style="color:{color};font-size:12px">{ter_pct:.2f}%</span>'
+
+def fmt_aum(aum):
+    """Formatta le masse gestite (valuta base del fondo) con colore per fascia di dimensione."""
+    if not aum:
+        return '<span style="color:#999">n.d.</span>'
+    if aum >= 1e9:
+        txt = f"{aum/1e9:.1f}B"
+    elif aum >= 1e6:
+        txt = f"{aum/1e6:.0f}M"
+    elif aum >= 1e3:
+        txt = f"{aum/1e3:.0f}K"
+    else:
+        txt = f"{aum:.0f}"
+    color = "#16a34a" if aum >= 100e6 else ("#d97706" if aum >= 20e6 else "#dc2626")
+    return f'<span style="color:{color};font-size:12px">{txt}</span>'
+
 def auto_comment(d):
     """Commento sintetico automatico per ogni titolo, basato sui segnali calcolati."""
     rsi    = d.get("rsi")      or 0
@@ -743,7 +873,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
 
 def etf_rows(lst, analysis_map, market_delta=0):
     if not lst:
-        return '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px">Nessun ETF ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="16" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -751,7 +881,7 @@ def etf_rows(lst, analysis_map, market_delta=0):
         rows += f"""<tr>
             <td style="color:#999;font-size:12px">{i}</td>
             <td><strong>{d['symbol']}</strong></td>
-            <td style="color:#6366f1;font-size:13px">{a.get('tema','Tematico')}</td>
+            <td style="color:#6366f1;font-size:13px">{a.get('tema','—')}</td>
             <td>{price_str}</td>
             <td>{d['rsi'] if d.get('rsi') else 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
@@ -761,7 +891,9 @@ def etf_rows(lst, analysis_map, market_delta=0):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
+            <td>{etp_reco_badge(etp_total_score(d))}</td>
+            <td>{fmt_ter(d.get('expense_ratio'))}</td>
+            <td>{fmt_aum(d.get('aum'))}</td>
             <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
         </tr>"""
     return rows
@@ -1464,7 +1596,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if etfs else '<p class="empty-note">Nessun ETF/ETN/ETC ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>TER</th><th>AUM</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
