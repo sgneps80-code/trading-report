@@ -61,6 +61,8 @@ TV_COLS = [
     "Low.3M",                   # minimo 3 mesi (pattern detection)
     "52WkHigh",                 # massimo 52 settimane
     "52WkLow",                  # minimo 52 settimane
+    "type",                     # tipo TV: stock / fund / structured / dr ...
+    "typespecs",                # sottotipo: ["etf"], ["etn"], ["etc"], ["common"] ...
 ]
 
 def detect_candle(o, h, l, c, prev_o=None, prev_c=None):
@@ -135,6 +137,8 @@ def parse_tv_row(row):
     low3m  = d.get("Low.3M")   or 0
     high52 = d.get("52WkHigh") or 0
     low52  = d.get("52WkLow")  or 0
+    sec_type  = d.get("type")
+    typespecs = d.get("typespecs") or []
 
     # ── Candele giapponesi ──
     candle_d = detect_candle(o_day, h_day, l_day, price) if h_day and l_day else "—"
@@ -207,6 +211,8 @@ def parse_tv_row(row):
         "low_3m":     low3m,
         "high_52w":   high52,
         "low_52w":    low52,
+        "sec_type":   sec_type,
+        "typespecs":  typespecs,
     }
 
 def momentum_score(d):
@@ -286,9 +292,28 @@ def screen_usa():
     logger.info(f"USA: {len(rows)} titoli → top {min(10, len(rows))}")
     return rows[:10]
 
-# ─── SCREENER ETF ─────────────────────────────────────────────────────────────
+# ─── SCREENER ETF / ETN / ETC (solo Borsa Italiana) ───────────────────────────
+_ETP_TYPESPECS = {"etf", "etn", "etc", "etp"}
+
+def _is_etp(r):
+    """True solo per ETF, ETN o ETC. Esclude certificati e altri 'structured'."""
+    specs = r.get("typespecs") or []
+    if isinstance(specs, str):
+        specs = [specs]
+    specs = {str(s).lower() for s in specs}
+    sec_type = (r.get("sec_type") or "").lower()
+
+    # Su TradingView gli ETF sono type="fund" (e in Italia, di fatto, lo sono
+    # anche la maggior parte di ETC/ETN quotati su ETFplus)
+    if sec_type == "fund":
+        return True
+    # Alcuni ETN/ETC arrivano come "structured": li tengo solo se il typespec conferma
+    if sec_type == "structured" and (specs & _ETP_TYPESPECS):
+        return True
+    return False
+
 def screen_etfs():
-    logger.info("Screening ETF — TradingView...")
+    logger.info("Screening ETF/ETN/ETC — TradingView (solo Borsa Italiana)...")
     payload = {
         "filter": [
             {"left": "RSI",                     "operation": "in_range", "right": [35, 82]},
@@ -296,17 +321,20 @@ def screen_etfs():
             {"left": "MACD.hist",               "operation": "greater",  "right": 0},
         ],
         "options": {"lang": "en"},
-        "markets": ["america", "italy", "germany"],
-        "symbols": {"query": {"types": ["fund", "dr"]}, "tickers": []},
+        "markets": ["italy"],
+        "symbols": {"query": {"types": ["fund", "structured"]}, "tickers": []},
         "columns": TV_COLS,
         "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
-        "range": [0, 150]
+        "range": [0, 200]
     }
-    data = tv_request("https://scanner.tradingview.com/global/scan", payload)
+    data = tv_request("https://scanner.tradingview.com/italy/scan", payload)
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
-    rows = [r for r in rows if r.get("price") and _passes_momentum(r, min_price=0.5, min_perf1m=0)]
+    rows = [
+        r for r in rows
+        if r.get("price") and _is_etp(r) and _passes_momentum(r, min_price=0.5, min_perf1m=0)
+    ]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"ETF: {len(rows)} trovati → top {min(10, len(rows))}")
+    logger.info(f"ETF/ETN/ETC Italia: {len(rows)} trovati → top {min(10, len(rows))}")
     return rows[:10]
 
 # ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
@@ -1430,10 +1458,10 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     </table>
   </div>
 
-  <!-- TOP 10 ETF TEMATICI -->
+  <!-- TOP 10 ETF / ETN / ETC ITALIA -->
   <div class="section">
-    <h2>Top ETF Tematici — Momentum <span class="badge-count">{len(etfs)} oggi</span></h2>
-    {"" if etfs else '<p class="empty-note">Nessun ETF ha superato tutti i filtri oggi.</p>'}
+    <h2>Top ETF / ETN / ETC (Borsa Italiana) — Momentum <span class="badge-count">{len(etfs)} oggi</span></h2>
+    {"" if etfs else '<p class="empty-note">Nessun ETF/ETN/ETC ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
         <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th>
