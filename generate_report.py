@@ -392,109 +392,156 @@ def etp_score(r):
     return s
 
 def etp_cost_score(r):
-    """Punteggio COSTO/DIMENSIONE (strutturale): premia TER basso e masse gestite ampie.
-    NOTA: TradingView può esporre expense_ratio come percentuale (0.20 = 0,20%) o come
-    frazione (0.002). La normalizzazione qui sotto è un'euristica difensiva: verifica il
-    formato reale col log di debug in screen_etfs e, se serve, togli la riga di normalizzazione."""
+    """Punteggio COSTO/DIMENSIONE (strutturale): premia TER basso e masse ampie.
+
+    NEUTRO sui dati mancanti: la diagnostica ha mostrato che TradingView
+    valorizza expense_ratio ma spesso lascia aum a None, e Yahoo quoteSummary
+    ora risponde 401. Penalizzare un dato assente equivarrebbe a punire un ETF
+    solo perche' l'API non lo espone, quindi in quel caso non si assegna nulla.
+
+    NOTA sul formato: TradingView puo' esporre expense_ratio come percentuale
+    (0.20 = 0,20%) o come frazione (0.002). L'euristica sotto e' difensiva:
+    verifica il valore reale nei log e, se il formato e' stabile, semplificala."""
     ter = r.get("expense_ratio")
-    aum = r.get("aum") or 0
+    aum = r.get("aum")
     s = 0.0
     if ter is not None:
-        ter_pct = ter * 100 if ter < 0.05 else ter    # euristica: <0.05 ⇒ probabilmente frazione
+        ter_pct = ter * 100 if ter < 0.05 else ter    # euristica: <0.05 ⇒ frazione
         if   ter_pct <= 0.15: s += 2.0
         elif ter_pct <= 0.30: s += 1.5
         elif ter_pct <= 0.50: s += 1.0
         elif ter_pct <= 0.75: s += 0.3
         else:                 s -= 1.0    # >0,75%: tipico dei prodotti a leva
-    if   aum >= 500_000_000: s += 2.0
-    elif aum >= 100_000_000: s += 1.5
-    elif aum >=  20_000_000: s += 1.0
-    elif aum >=   5_000_000: s += 0.3
-    else:                    s -= 0.5     # troppo piccolo ⇒ rischio chiusura / spread ampio
+    if aum:                               # None o 0 ⇒ nessun punteggio, non penalita'
+        if   aum >= 500_000_000: s += 2.0
+        elif aum >= 100_000_000: s += 1.5
+        elif aum >=  20_000_000: s += 1.0
+        elif aum >=   5_000_000: s += 0.3
+        else:                    s -= 0.5  # davvero piccolo ⇒ spread ampio, rischio chiusura
     return s
 
 def etp_total_score(r):
     """Convenienza complessiva = tecnica (breve) + costo/dimensione (strutturale)."""
     return etp_score(r) + etp_cost_score(r)
 
-def _etf_payload(cols, types, filters):
-    return {
-        "filter": filters,
-        "options": {"lang": "en"},
-        "markets": ["italy"],
-        "symbols": {"query": {"types": list(types)}, "tickers": []},
-        "columns": list(cols),
-        "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
-        "range": [0, 300],
-    }
+# ── Universo ETP: lista esplicita di ticker quotati su Borsa Italiana ──
+# La diagnostica ha dimostrato che il mercato "italy" dello screener TradingView
+# contiene SOLO azioni (1818 strumenti, tutti type=stock) piu' 7 fondi chiusi:
+# gli ETF di Borsa Italiana NON sono raggiungibili per mercato.
+# Sono invece indicizzati sotto il prefisso EURONEXT: (Borsa Italiana e' del
+# gruppo Euronext dal 2021) e si interrogano per lista esplicita di tickers.
+#
+# I ticker VERIFICATI dalla diagnostica sono marcati OK. Gli altri sono
+# plausibili ma da confermare: quelli che non risolvono vengono semplicemente
+# saltati e segnalati nei log, senza rompere il report.
+ETP_TICKERS_DEFAULT = [
+    # --- Azionario globale / sviluppato ---
+    "SWDA",    # iShares Core MSCI World            (OK verificato)
+    "VWCE",    # Vanguard FTSE All-World Acc        (OK verificato)
+    "EIMI",    # iShares Core MSCI EM IMI           (OK verificato)
+    "VUAA",    # Vanguard S&P 500 Acc               (OK verificato)
+    "CSSPX",   # iShares Core S&P 500 (ticker Milano di CSPX)
+    "XDWD",    # Xtrackers MSCI World
+    "IUSQ",    # iShares MSCI ACWI
+    "WSML",    # iShares MSCI World Small Cap
+    # --- Azionario Europa ---
+    "MEUD",    # Amundi Stoxx Europe 600            (OK verificato)
+    "VERX",    # Vanguard FTSE Developed Europe ex-UK
+    # --- Obbligazionario / monetario ---
+    "XEON",    # Xtrackers EUR Overnight Rate       (OK verificato)
+    "AGGH",    # iShares Core Global Aggregate Bond (OK verificato)
+    "IBGL",    # iShares Euro Govt Bond 15-30y
+    "VECP",    # Vanguard EUR Corporate Bond
+    # --- Materie prime / ETC ---
+    "SGLD",    # Invesco Physical Gold              (OK verificato)
+    "PHAU",    # WisdomTree Physical Gold           (OK verificato)
+    "SSLV",    # WisdomTree Physical Silver
+    # --- Settoriali / tematici ---
+    "QDVE",    # iShares S&P 500 Information Technology
+    "WCLD",    # WisdomTree Cloud Computing
+    "INRG",    # iShares Global Clean Energy
+]
+
+def _etp_universe():
+    """Lista ticker ETP. Sovrascrivibile col secret/variabile ETP_TICKERS
+    (JSON array di stringhe), cosi' puoi curare la tua watchlist senza
+    toccare il codice."""
+    raw = os.environ.get("ETP_TICKERS", "").strip()
+    if raw:
+        try:
+            lista = json.loads(raw)
+            if isinstance(lista, list) and lista:
+                logger.info(f"Universo ETP da variabile ETP_TICKERS: {len(lista)} ticker")
+                return [str(t).strip().upper() for t in lista]
+        except Exception as e:
+            logger.warning(f"ETP_TICKERS non valido ({e}), uso la lista di default")
+    return ETP_TICKERS_DEFAULT
+
+# Prefissi da provare, in ordine. EURONEXT copre Borsa Italiana; gli altri
+# servono da ripiego per ETF non quotati a Milano (stesso ISIN, altra sede).
+_ETP_PREFISSI = ["EURONEXT", "XETR", "LSE"]
 
 def screen_etfs():
-    """Screener ETF/ETN/ETC su Borsa Italiana.
+    """Seleziona ETF/ETN/ETC quotati su Borsa Italiana.
 
-    Usa TENTATIVI PROGRESSIVI invece di una singola query: se una variante non
-    restituisce nulla (colonna non valida, tassonomia cambiata, filtri troppo
-    stretti) si passa alla successiva, piu' permissiva. Cosi' un cambiamento
-    lato TradingView degrada la qualita' del dato invece di svuotare la sezione.
+    Interroga TradingView per LISTA ESPLICITA di ticker con prefisso EURONEXT:,
+    perche' lo screener per mercato non espone gli ETP italiani (vedi diagnostica).
+    Per i ticker che non risolvono su EURONEXT si tenta XETR e LSE.
     """
-    logger.info("Screening ETF/ETN/ETC — TradingView (solo Borsa Italiana)...")
+    tickers = _etp_universe()
+    logger.info(f"Screening ETP — {len(tickers)} ticker richiesti...")
 
-    filtri_std = [
-        {"left": "RSI",                     "operation": "in_range", "right": [30, 85]},
-        {"left": "average_volume_10d_calc", "operation": "greater",  "right": 3000},
-    ]
+    cols = TV_COLS + ETF_EXTRA_COLS
+    trovati, mancanti = {}, list(tickers)
 
-    # Dal piu' ricco al piu' permissivo. (etichetta, colonne, types, filtri)
-    tentativi = [
-        ("completo + TER/AUM", TV_COLS + ETF_EXTRA_COLS, ["fund", "structured"], filtri_std),
-        ("senza TER/AUM",      TV_COLS,                  ["fund", "structured"], filtri_std),
-        ("solo fund",          TV_COLS,                  ["fund"],               filtri_std),
-        ("senza filtri API",   TV_COLS,                  ["fund", "structured"], []),
-    ]
-
-    raw, cols_usate = [], TV_COLS
-    for etichetta, cols, types, filtri in tentativi:
+    for pre in _ETP_PREFISSI:
+        if not mancanti:
+            break
+        simboli = [f"{pre}:{t}" for t in mancanti]
         try:
-            data = tv_request("https://scanner.tradingview.com/italy/scan",
-                              _etf_payload(cols, types, filtri))
+            data = tv_request("https://scanner.tradingview.com/global/scan",
+                              {"symbols": {"tickers": simboli}, "columns": cols})
         except Exception as e:
-            logger.warning(f"ETP tentativo '{etichetta}' fallito: {e}")
+            logger.warning(f"ETP fetch prefisso {pre}: {e}")
             continue
         righe = data.get("data") or []
-        logger.info(f"ETP tentativo '{etichetta}': {len(righe)} righe grezze")
-        if righe:
-            raw = [parse_tv_row(r, cols) for r in righe]
-            cols_usate = cols
-            break
+        risolti = []
+        for row in righe:
+            r = parse_tv_row(row, cols)
+            tk = row.get("s", "").split(":")[-1]
+            if tk in mancanti:
+                r["tv_symbol"] = row.get("s", "")
+                trovati[tk] = r
+                risolti.append(tk)
+        mancanti = [t for t in mancanti if t not in risolti]
+        logger.info(f"ETP prefisso {pre}: {len(risolti)} risolti, {len(mancanti)} da cercare")
 
-    if not raw:
-        logger.error("ETP: nessun tentativo ha prodotto righe. "
-                     "Esegui diagnose_etf.py per isolare la causa.")
+    if mancanti:
+        logger.warning(f"ETP non risolti con nessun prefisso: {', '.join(mancanti)}")
+    if not trovati:
+        logger.error("ETP: nessun ticker risolto. Verifica la lista o esegui la diagnostica.")
         return []
 
-    if cols_usate is TV_COLS:
-        logger.warning("ETP: TER/AUM non disponibili in questo run — "
-                       "il punteggio costo sara' neutro.")
+    rows = list(trovati.values())
 
     # Imbuto diagnostico: mostra DOVE si perdono i candidati
-    after_etp = [r for r in raw if _is_etp(r)]
+    after_etp = [r for r in rows if _is_etp(r)]
     eligible  = [r for r in after_etp if r.get("price") and _passes_etp(r, min_price=1.0)]
-    logger.info(f"ETP funnel: raw={len(raw)} → is_etp={len(after_etp)} → eleggibili={len(eligible)}")
+    logger.info(f"ETP funnel: risolti={len(rows)} → is_etp={len(after_etp)} → eleggibili={len(eligible)}")
 
-    # Se _is_etp azzera tutto, la tassonomia TV e' cambiata: meglio mostrare
-    # qualcosa di grezzo che una sezione vuota, segnalandolo nei log.
-    if raw and not after_etp:
-        tipi = {(r.get("sec_type"), str(r.get("typespecs"))) for r in raw[:30]}
+    if rows and not after_etp:
+        tipi = {(r.get("sec_type"), str(r.get("typespecs"))) for r in rows}
         logger.error(f"ETP: _is_etp() ha scartato TUTTO. Tassonomia vista: {tipi}")
-        after_etp = raw
+        after_etp = rows
         eligible  = [r for r in after_etp if r.get("price") and _passes_etp(r, min_price=1.0)]
-        logger.warning(f"ETP: filtro tipo bypassato → {len(eligible)} eleggibili")
 
     if after_etp and not eligible:
         logger.warning("ETP: nessuno supera _passes_etp (liquidita'/trend). "
-                       "Valuta di abbassare la soglia di controvalore.")
+                       "Mostro comunque i migliori per punteggio, senza cancello.")
+        eligible = after_etp
 
     eligible.sort(key=etp_total_score, reverse=True)
-    logger.info(f"ETF/ETN/ETC Italia: {len(eligible)} eleggibili → top {min(10, len(eligible))}")
+    logger.info(f"ETP: {len(eligible)} eleggibili → top {min(10, len(eligible))}")
     return eligible[:10]
 
 # ─── ULTIMI 5 GIORNI: OHLC + PERFORMANCE ──────────────────────────────────────
