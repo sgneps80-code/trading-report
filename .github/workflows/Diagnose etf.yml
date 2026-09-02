@@ -19,20 +19,43 @@ jobs:
       - name: Installa dipendenze
         run: pip install requests
 
+      - name: Mostra struttura del repository
+        # Serve a vedere dove si trovano davvero i file, se qualcosa non torna.
+        run: |
+          echo "=== File nella radice ==="
+          ls -la
+          echo ""
+          echo "=== Tutti i file .py nel repo ==="
+          find . -name "*.py" -not -path "./.git/*" || true
+
+      - name: Localizza lo script diagnostico
+        id: trova
+        run: |
+          # Accetta sia "diagnose_etf.py" sia "diagnose etf.py" (o varianti con
+          # trattino/maiuscole): il nome puo' cambiare a seconda di come e' stato scaricato.
+          SCRIPT=$(find . -iname "diagnose*etf*.py" -not -path "./.git/*" | head -1)
+          if [ -z "$SCRIPT" ]; then
+            echo "::error::Script diagnostico non trovato. Committa il file .py nel repository e rilancia."
+            exit 1
+          fi
+          echo "Trovato: $SCRIPT"
+          echo "path=$SCRIPT" >> "$GITHUB_OUTPUT"
+
       - name: Esegui diagnostica
         # tee: mostra l'output nei log E lo salva su file per l'artifact.
-        # continue-on-error: anche se lo script fallisce, vogliamo vedere l'output.
         continue-on-error: true
-        run: python diagnose_etf.py 2>&1 | tee diagnostica.txt
+        run: python "${{ steps.trova.outputs.path }}" 2>&1 | tee diagnostica.txt
 
       - name: Info sul runner
-        # L'IP del runner serve a capire se TradingView blocca i datacenter GitHub.
+        if: always()
+        # L'IP del runner serve a capire se TradingView blocca i datacenter.
         run: |
           echo "=== IP pubblico del runner GitHub ===" | tee -a diagnostica.txt
           curl -s https://api.ipify.org | tee -a diagnostica.txt
           echo "" | tee -a diagnostica.txt
 
       - name: Salva risultato come artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: diagnostica-etf
