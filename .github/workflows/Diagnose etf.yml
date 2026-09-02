@@ -1,0 +1,40 @@
+name: Diagnostica ETF
+
+# Solo avvio manuale: si lancia dalla tab "Actions" del repository.
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa dipendenze
+        run: pip install requests
+
+      - name: Esegui diagnostica
+        # tee: mostra l'output nei log E lo salva su file per l'artifact.
+        # continue-on-error: anche se lo script fallisce, vogliamo vedere l'output.
+        continue-on-error: true
+        run: python diagnose_etf.py 2>&1 | tee diagnostica.txt
+
+      - name: Info sul runner
+        # L'IP del runner serve a capire se TradingView blocca i datacenter GitHub.
+        run: |
+          echo "=== IP pubblico del runner GitHub ===" | tee -a diagnostica.txt
+          curl -s https://api.ipify.org | tee -a diagnostica.txt
+          echo "" | tee -a diagnostica.txt
+
+      - name: Salva risultato come artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostica-etf
+          path: diagnostica.txt
+          retention-days: 7
