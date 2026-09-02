@@ -312,21 +312,27 @@ def screen_usa():
 
 # ─── SCREENER ETF / ETN / ETC (solo Borsa Italiana) ───────────────────────────
 _ETP_TYPESPECS = {"etf", "etn", "etc", "etp"}
+# Typespecs da escludere SEMPRE: sono fondi, non ETP negoziati in continua.
+_ESCLUSI_TYPESPECS = {"closedend", "mutual", "openend", "hedge"}
 
 def _is_etp(r):
-    """True solo per ETF, ETN o ETC. Esclude certificati e altri 'structured'."""
+    """True solo per ETF, ETN o ETC.
+
+    La diagnostica ha mostrato che il mercato 'italy' restituisce sotto
+    type='fund' anche fondi chiusi (typespecs=['closedend']) e fondi comuni:
+    non basta piu' accettare qualsiasi 'fund', serve il typespec esplicito.
+    """
     specs = r.get("typespecs") or []
     if isinstance(specs, str):
         specs = [specs]
     specs = {str(s).lower() for s in specs}
     sec_type = (r.get("sec_type") or "").lower()
 
-    # Su TradingView gli ETF sono type="fund" (e in Italia, di fatto, lo sono
-    # anche la maggior parte di ETC/ETN quotati su ETFplus)
-    if sec_type == "fund":
-        return True
-    # Alcuni ETN/ETC arrivano come "structured": li tengo solo se il typespec conferma
-    if sec_type == "structured" and (specs & _ETP_TYPESPECS):
+    # Esclusione esplicita: fondi chiusi/comuni non sono ETP
+    if specs & _ESCLUSI_TYPESPECS:
+        return False
+    # Accetta fund/structured solo con typespec ETP confermato
+    if sec_type in ("fund", "structured") and (specs & _ETP_TYPESPECS):
         return True
     return False
 
