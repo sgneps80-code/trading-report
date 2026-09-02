@@ -63,6 +63,11 @@ TV_COLS = [
     "52WkLow",                  # minimo 52 settimane
     "type",                     # tipo TV: stock / fund / structured / dr ...
     "typespecs",                # sottotipo: ["etf"], ["etn"], ["etc"], ["common"] ...
+]
+
+# Colonne richieste SOLO per gli ETP. Tenute fuori da TV_COLS di proposito:
+# se questi nomi non sono validi sullo scanner, romperebbero anche le query azioni.
+ETF_EXTRA_COLS = [
     "expense_ratio",            # TER del fondo (per punteggio costo)
     "aum",                      # masse gestite / assets under management
 ]
@@ -108,11 +113,18 @@ def tv_request(url, payload):
                 raise
     return {}
 
-def parse_tv_row(row):
-    """Converte una riga dello screener TV nel formato interno."""
+def parse_tv_row(row, cols=None):
+    """Converte una riga dello screener TV nel formato interno.
+    `cols` deve corrispondere ESATTAMENTE alle colonne richieste nel payload:
+    lo zip qui sotto e' posizionale, quindi un mismatch disallinea tutti i campi."""
+    cols = cols or TV_COLS
     s    = row.get("s", "")       # "BVME:ENI"
     vals = row.get("d", [])
-    d    = dict(zip(TV_COLS, vals))
+    if len(vals) != len(cols):
+        # Guardia: senza questo, uno zip corto assegna silenziosamente i valori
+        # alle colonne sbagliate (RSI al posto del MACD, ecc.)
+        logger.warning(f"Colonne disallineate per {s}: attese {len(cols)}, ricevute {len(vals)}")
+    d    = dict(zip(cols, vals))
 
     ticker = s.split(":")[-1]     # "ENI"
     price  = d.get("close") or 0
@@ -399,38 +411,208 @@ def etp_total_score(r):
     """Convenienza complessiva = tecnica (breve) + costo/dimensione (strutturale)."""
     return etp_score(r) + etp_cost_score(r)
 
-def screen_etfs():
-    logger.info("Screening ETF/ETN/ETC — TradingView (solo Borsa Italiana)...")
-    payload = {
-        # Filtri API volutamente larghi: la selezione fine avviene in Python via
-        # _passes_etp (eleggibilità) + etp_total_score (ranking). Rimosso il gate
-        # MACD.hist>0 server-side, che tagliava fuori quasi tutti gli ETP a bassa volatilità.
-        "filter": [
-            {"left": "RSI",                     "operation": "in_range", "right": [30, 85]},
-            {"left": "average_volume_10d_calc", "operation": "greater",  "right": 3000},
-        ],
+def _etf_payload(cols, types, filters):
+    return {
+        "filter": filters,
         "options": {"lang": "en"},
         "markets": ["italy"],
-        "symbols": {"query": {"types": ["fund", "structured"]}, "tickers": []},
-        "columns": TV_COLS,
+        "symbols": {"query": {"types": list(types)}, "tickers": []},
+        "columns": list(cols),
         "sort": {"sortBy": "change|1M", "sortOrder": "desc"},
-        "range": [0, 300]
+        "range": [0, 300],
     }
-    data = tv_request("https://scanner.tradingview.com/italy/scan", payload)
-    raw = [parse_tv_row(r) for r in (data.get("data") or [])]
 
-    # Imbuto diagnostico: mostra DOVE si perdono i candidati (utile per calibrare le soglie)
-    after_etp  = [r for r in raw if _is_etp(r)]
-    eligible   = [r for r in after_etp if r.get("price") and _passes_etp(r, min_price=1.0)]
+def screen_etfs():
+    """Screener ETF/ETN/ETC su Borsa Italiana.
+
+    Usa TENTATIVI PROGRESSIVI invece di una singola query: se una variante non
+    restituisce nulla (colonna non valida, tassonomia cambiata, filtri troppo
+    stretti) si passa alla successiva, piu' permissiva. Cosi' un cambiamento
+    lato TradingView degrada la qualita' del dato invece di svuotare la sezione.
+    """
+    logger.info("Screening ETF/ETN/ETC — TradingView (solo Borsa Italiana)...")
+
+    filtri_std = [
+        {"left": "RSI",                     "operation": "in_range", "right": [30, 85]},
+        {"left": "average_volume_10d_calc", "operation": "greater",  "right": 3000},
+    ]
+
+    # Dal piu' ricco al piu' permissivo. (etichetta, colonne, types, filtri)
+    tentativi = [
+        ("completo + TER/AUM", TV_COLS + ETF_EXTRA_COLS, ["fund", "structured"], filtri_std),
+        ("senza TER/AUM",      TV_COLS,                  ["fund", "structured"], filtri_std),
+        ("solo fund",          TV_COLS,                  ["fund"],               filtri_std),
+        ("senza filtri API",   TV_COLS,                  ["fund", "structured"], []),
+    ]
+
+    raw, cols_usate = [], TV_COLS
+    for etichetta, cols, types, filtri in tentativi:
+        try:
+            data = tv_request("https://scanner.tradingview.com/italy/scan",
+                              _etf_payload(cols, types, filtri))
+        except Exception as e:
+            logger.warning(f"ETP tentativo '{etichetta}' fallito: {e}")
+            continue
+        righe = data.get("data") or []
+        logger.info(f"ETP tentativo '{etichetta}': {len(righe)} righe grezze")
+        if righe:
+            raw = [parse_tv_row(r, cols) for r in righe]
+            cols_usate = cols
+            break
+
+    if not raw:
+        logger.error("ETP: nessun tentativo ha prodotto righe. "
+                     "Esegui diagnose_etf.py per isolare la causa.")
+        return []
+
+    if cols_usate is TV_COLS:
+        logger.warning("ETP: TER/AUM non disponibili in questo run — "
+                       "il punteggio costo sara' neutro.")
+
+    # Imbuto diagnostico: mostra DOVE si perdono i candidati
+    after_etp = [r for r in raw if _is_etp(r)]
+    eligible  = [r for r in after_etp if r.get("price") and _passes_etp(r, min_price=1.0)]
     logger.info(f"ETP funnel: raw={len(raw)} → is_etp={len(after_etp)} → eleggibili={len(eligible)}")
-    # Debug tassonomia/costi: scommenta per vedere cosa restituisce davvero l'API
-    # for r in after_etp[:20]:
-    #     logger.info(f"  {r['symbol']}: type={r.get('sec_type')} specs={r.get('typespecs')} "
-    #                 f"ter={r.get('expense_ratio')} aum={r.get('aum')}")
+
+    # Se _is_etp azzera tutto, la tassonomia TV e' cambiata: meglio mostrare
+    # qualcosa di grezzo che una sezione vuota, segnalandolo nei log.
+    if raw and not after_etp:
+        tipi = {(r.get("sec_type"), str(r.get("typespecs"))) for r in raw[:30]}
+        logger.error(f"ETP: _is_etp() ha scartato TUTTO. Tassonomia vista: {tipi}")
+        after_etp = raw
+        eligible  = [r for r in after_etp if r.get("price") and _passes_etp(r, min_price=1.0)]
+        logger.warning(f"ETP: filtro tipo bypassato → {len(eligible)} eleggibili")
+
+    if after_etp and not eligible:
+        logger.warning("ETP: nessuno supera _passes_etp (liquidita'/trend). "
+                       "Valuta di abbassare la soglia di controvalore.")
 
     eligible.sort(key=etp_total_score, reverse=True)
     logger.info(f"ETF/ETN/ETC Italia: {len(eligible)} eleggibili → top {min(10, len(eligible))}")
     return eligible[:10]
+
+# ─── ULTIMI 5 GIORNI: OHLC + PERFORMANCE ──────────────────────────────────────
+# Lo screener TradingView restituisce solo valori SCALARI (un numero per colonna),
+# non serie storiche: non puo' quindi fornire 5 candele giornaliere. Per il grafico
+# a candele servono dati storici, presi dall'endpoint chart di Yahoo Finance.
+
+_TV_TO_YF = {
+    "MIL": ".MI", "BVME": ".MI", "XMIL": ".MI", "BIT": ".MI", "EURONEXT": ".MI",
+    "XETR": ".DE", "XETRA": ".DE", "FWB": ".F", "GETTEX": ".DE",
+    "XPAR": ".PA", "EPA": ".PA", "XAMS": ".AS", "AMS": ".AS",
+    "LSE": ".L", "XLON": ".L", "XSWX": ".SW", "SWX": ".SW",
+    "XMAD": ".MC", "BME": ".MC", "XBRU": ".BR", "XLIS": ".LS",
+}
+_YF_US = {"NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "CBOE"}
+
+def tv_to_yahoo_symbol(tv_symbol):
+    """Converte 'MIL:SWDA' → 'SWDA.MI'. I ticker USA restano invariati."""
+    if not tv_symbol:
+        return ""
+    if ":" not in tv_symbol:
+        return tv_symbol
+    exch, ticker = tv_symbol.split(":", 1)
+    exch = exch.upper()
+    if exch in _YF_US:
+        return ticker
+    return ticker + _TV_TO_YF.get(exch, "")
+
+_YF_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
+def fetch_5d_ohlc(tv_symbol):
+    """Ultime 5 sedute OHLC da Yahoo Finance.
+    Restituisce [] in caso di errore: la colonna mostrera' 'n.d.' senza rompere il report.
+    Chiediamo 1 mese e teniamo le ultime 5 barre valide, cosi' festivi e giorni
+    senza scambi non riducono il campione."""
+    ysym = tv_to_yahoo_symbol(tv_symbol)
+    if not ysym:
+        return []
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+           f"?range=1mo&interval=1d")
+    try:
+        r = requests.get(url, headers=_YF_HEADERS, timeout=12)
+        if r.status_code != 200:
+            logger.warning(f"5gg OHLC {ysym}: HTTP {r.status_code}")
+            return []
+        res = (r.json().get("chart") or {}).get("result") or []
+        if not res:
+            return []
+        quotes = (res[0].get("indicators") or {}).get("quote") or [{}]
+        q = quotes[0]
+        o = q.get("open")  or []
+        h = q.get("high")  or []
+        l = q.get("low")   or []
+        c = q.get("close") or []
+        bars = [
+            {"o": o[i], "h": h[i], "l": l[i], "c": c[i]}
+            for i in range(min(len(o), len(h), len(l), len(c)))
+            if None not in (o[i], h[i], l[i], c[i])
+        ]
+        return bars[-5:]
+    except Exception as e:
+        logger.warning(f"5gg OHLC {ysym}: {e}")
+        return []
+
+def enrich_5d(rows, etichetta=""):
+    """Aggiunge bars_5d e perf_5d a ogni riga. Fallisce in silenzio sul singolo titolo."""
+    for r in rows:
+        sym = r.get("tv_symbol") or r.get("yf_symbol") or r.get("symbol")
+        bars = fetch_5d_ohlc(sym)
+        r["bars_5d"] = bars
+        if len(bars) >= 2 and bars[0].get("c"):
+            r["perf_5d"] = round((bars[-1]["c"] / bars[0]["c"] - 1) * 100, 1)
+        else:
+            r["perf_5d"] = None
+    ok = sum(1 for r in rows if r.get("bars_5d"))
+    logger.info(f"5gg OHLC{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
+    return rows
+
+def candles_5d_svg(bars, width=84, height=34):
+    """Mini grafico a candele giapponesi (SVG inline) delle ultime 5 sedute.
+    Verde = chiusura >= apertura, rosso = chiusura < apertura.
+    Ogni candela ha ombra (high-low) e corpo (open-close)."""
+    if not bars:
+        return '<span style="color:#999;font-size:11px">n.d.</span>'
+    lo = min(b["l"] for b in bars)
+    hi = max(b["h"] for b in bars)
+    rng = hi - lo
+    if rng <= 0:
+        return '<span style="color:#999;font-size:11px">—</span>'
+
+    pad    = 3
+    usable = height - 2 * pad
+    slot   = width / len(bars)
+    body_w = max(3.0, slot * 0.55)
+
+    def y(v):
+        return pad + (hi - v) / rng * usable
+
+    parts = []
+    for i, b in enumerate(bars):
+        cx  = slot * (i + 0.5)
+        up  = b["c"] >= b["o"]
+        col = "#16a34a" if up else "#dc2626"
+        # ombra (high-low)
+        parts.append(
+            f'<line x1="{cx:.1f}" y1="{y(b["h"]):.1f}" x2="{cx:.1f}" y2="{y(b["l"]):.1f}" '
+            f'stroke="{col}" stroke-width="1"/>'
+        )
+        # corpo (open-close)
+        y_top  = y(max(b["o"], b["c"]))
+        y_bot  = y(min(b["o"], b["c"]))
+        h_body = max(1.0, y_bot - y_top)
+        parts.append(
+            f'<rect x="{cx - body_w/2:.1f}" y="{y_top:.1f}" '
+            f'width="{body_w:.1f}" height="{h_body:.1f}" fill="{col}"/>'
+        )
+
+    tip = f"5 sedute — min {lo:.2f} / max {hi:.2f}"
+    return (f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+            f'style="display:block"><title>{tip}</title>{"".join(parts)}</svg>')
 
 # ─── PORTAFOGLIO ──────────────────────────────────────────────────────────────
 
@@ -849,7 +1031,7 @@ def rec_badge(rec_str):
 
 def stock_rows(lst, analysis_map, market_delta=0):
     if not lst:
-        return '<tr><td colspan="12" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (RSI 48-75, prezzo &gt; EMA20/50, MACD &gt; 0)</td></tr>'
+        return '<tr><td colspan="15" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (RSI 48-75, prezzo &gt; EMA20/50, MACD &gt; 0)</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -861,6 +1043,8 @@ def stock_rows(lst, analysis_map, market_delta=0):
             <td>{d['rsi'] if d.get('rsi') else 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
             <td>{pct(d.get('perf_3m'))}</td>
+            <td>{pct(d.get('perf_5d'))}</td>
+            <td>{candles_5d_svg(d.get('bars_5d'))}</td>
             <td>{candle_badge(d.get('candle_d','—'))}</td>
             <td>{candle_badge(d.get('candle_w','—'))}</td>
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
@@ -873,7 +1057,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
 
 def etf_rows(lst, analysis_map, market_delta=0):
     if not lst:
-        return '<tr><td colspan="16" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="18" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -886,6 +1070,8 @@ def etf_rows(lst, analysis_map, market_delta=0):
             <td>{d['rsi'] if d.get('rsi') else 'n.d.'}</td>
             <td>{pct(d.get('perf_1m'))}</td>
             <td>{pct(d.get('perf_3m'))}</td>
+            <td>{pct(d.get('perf_5d'))}</td>
+            <td>{candles_5d_svg(d.get('bars_5d'))}</td>
             <td>{candle_badge(d.get('candle_d','—'))}</td>
             <td>{candle_badge(d.get('candle_w','—'))}</td>
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
@@ -922,6 +1108,8 @@ def portfolio_rows(portfolio, analysis_map, market_delta=0):
             <td style="color:{trend_color};font-weight:600;font-size:12px">{trend}</td>
             <td>{pct(p.get('perf_1m'))}</td>
             <td>{pct(p.get('perf_3m'))}</td>
+            <td>{pct(p.get('perf_5d'))}</td>
+            <td>{candles_5d_svg(p.get('bars_5d'))}</td>
             <td>{candle_badge(p.get('candle_d','—'))}</td>
             <td>{candle_badge(p.get('candle_w','—'))}</td>
             <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
@@ -1572,7 +1760,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_it, sm_it, mkt_it)}</tbody>
     </table>
@@ -1584,7 +1772,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_us, sm_us, mkt_us)}</tbody>
     </table>
@@ -1596,7 +1784,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     {"" if etfs else '<p class="empty-note">Nessun ETF/ETN/ETC ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>TER</th><th>AUM</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>TER</th><th>AUM</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
@@ -1607,7 +1795,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <h2>💼 Portafoglio — Analisi Tecnica</h2>
     <table>
       <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Operativo</th><th>Analisi</th>
+        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Operativo</th><th>Analisi</th>
       </tr></thead>
       <tbody>{portfolio_rows(portfolio, pm, (mkt_it + mkt_us) / 2)}</tbody>
     </table>
@@ -1726,6 +1914,14 @@ def main():
     stocks_us = screen_usa()
     etfs      = screen_etfs()
     portfolio = get_portfolio_data()
+
+    # Ultime 5 sedute (OHLC) per il grafico a candele e la performance 5gg.
+    # Richiede una chiamata HTTP per titolo: fallisce in silenzio sul singolo simbolo.
+    logger.info("Recupero OHLC ultimi 5 giorni...")
+    enrich_5d(stocks_it, "azioni IT")
+    enrich_5d(stocks_us, "azioni US")
+    enrich_5d(etfs,      "ETP")
+    enrich_5d(portfolio, "portafoglio")
 
     logger.info("Generating analysis with Claude...")
     analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
