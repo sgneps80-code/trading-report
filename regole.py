@@ -9,6 +9,10 @@ con quello che hai scritto tu).
 Legge anche data/eventi_macro.yaml (riunioni BCE/Fed): sono date ufficiali
 pubbliche, non richiedono un provider a pagamento, quindi restano un file
 versionato da aggiornare una volta l'anno.
+
+Legge anche data/watchlist.yaml: i titoli, oltre alle posizioni aperte, su
+cui calcolare i segnali di medio periodo (Sezione 4) — scritta a mano,
+niente scansione di tutto il mercato.
 """
 import logging
 import os
@@ -18,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 REGOLE_PATH = os.environ.get("REGOLE_PATH", "data/regole_posizioni.yaml")
 EVENTI_MACRO_PATH = os.environ.get("EVENTI_MACRO_PATH", "data/eventi_macro.yaml")
+WATCHLIST_PATH = os.environ.get("WATCHLIST_PATH", "data/watchlist.yaml")
 
 _NOMI_MACRO = {"bce": "Riunione BCE", "fed": "Riunione Fed (FOMC)"}
 
@@ -96,4 +101,21 @@ def load_eventi_macro(path=None):
             data = _parse_date(d)
             if data:
                 out.append({"data": data, "titolo": titolo, "tipo": "Macro"})
+    return out
+
+
+def load_watchlist(path=None):
+    """Titoli da monitorare per i segnali di medio periodo (Sezione 4), oltre
+    alle posizioni aperte. Restituisce [{"symbol", "name"}]."""
+    path = path or WATCHLIST_PATH
+    raw = _load_yaml(path)
+    if raw is None:
+        logger.warning(f"Watchlist non trovata o illeggibile: {path}")
+        return []
+
+    out = []
+    for v in (raw.get("simboli") or []):
+        if isinstance(v, dict) and v.get("symbol"):
+            symbol = str(v["symbol"]).strip()
+            out.append({"symbol": symbol, "name": v.get("name", symbol)})
     return out

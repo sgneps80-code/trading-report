@@ -14,6 +14,7 @@ import portfolio_sync
 import regole
 import storico
 import indicatori_storici
+import segnali_medio_periodo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -692,16 +693,17 @@ def enrich_5d(rows, etichetta=""):
         else:
             r["perf_5d"] = None
 
-def enrich_storico_esteso(rows, etichetta="", range_="2y"):
-    """Aggiunge bars_2y (storico OHLC reale) a ogni riga: serve a calcolare
-    EMA vere e la data effettiva dei loro incroci fin dal primo run, invece
-    di aspettare che il nostro log giornaliero (storico.py) si accumuli per
-    mesi. Fallisce in silenzio sul singolo titolo (vedi fetch_ohlc_range)."""
+def enrich_storico_esteso(rows, etichetta="", range_="5y"):
+    """Aggiunge bars_storico (OHLC giornaliero reale, 5 anni) a ogni riga:
+    serve sia alle EMA giornaliere di Sezione 1 sia ai segnali settimanali
+    di Sezione 4, che richiedono almeno ~200 settimane (~4 anni) di storico
+    per un'EMA200 settimanale valida — 2 anni non basterebbero.
+    Fallisce in silenzio sul singolo titolo (vedi fetch_ohlc_range)."""
     for r in rows:
         sym = r.get("tv_symbol") or r.get("yf_symbol") or r.get("symbol")
-        r["bars_2y"] = fetch_ohlc_range(sym, range_)
-    ok = sum(1 for r in rows if r.get("bars_2y"))
-    logger.info(f"Storico 2 anni{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
+        r["bars_storico"] = fetch_ohlc_range(sym, range_)
+    ok = sum(1 for r in rows if r.get("bars_storico"))
+    logger.info(f"Storico {range_}{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
     return rows
     ok = sum(1 for r in rows if r.get("bars_5d"))
     logger.info(f"5gg OHLC{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
@@ -830,6 +832,25 @@ def get_portfolio_data():
         parsed["divisa"]            = item.get("divisa")
         parsed["data_apertura"]     = item.get("data_apertura")
         parsed["giorni_detenzione"] = item.get("giorni_detenzione")
+        out.append(parsed)
+    return out
+
+def get_watchlist_data(watchlist):
+    """Dati tecnici correnti per la watchlist (Sezione 4), stesso meccanismo
+    di get_portfolio_data. Se un simbolo non risolve su TV, resta comunque
+    nella lista con dati 'n.d.': i segnali di medio periodo funzionano lo
+    stesso, perche' vengono calcolati sullo storico Yahoo, non su questi campi."""
+    if not watchlist:
+        return []
+    syms = [w["symbol"] for w in watchlist]
+    results = _tv_fetch_symbols(syms)
+    out = []
+    for w in watchlist:
+        sym = w["symbol"]
+        ticker = sym.split(":")[-1] if ":" in sym else sym
+        parsed = results.get(sym) or results.get(ticker) or {"symbol": ticker, "price": None, "rsi": None}
+        parsed["name"] = w.get("name", parsed.get("name", sym))
+        parsed["yf_symbol"] = sym
         out.append(parsed)
     return out
 
@@ -1305,8 +1326,8 @@ def posizioni_rows(portfolio, regole_map):
         price = p.get("price")
         ema50, ema200 = p.get("ema50") or 0, p.get("ema200") or 0
 
-        # 1) Storico reale (2 anni da Yahoo): EMA vere, data di incrocio vera.
-        bars = p.get("bars_2y") or []
+        # 1) Storico reale (Yahoo): EMA vere, data di incrocio vera.
+        bars = p.get("bars_storico") or []
         sopra50, g50, certo50 = indicatori_storici.trend_vs_ema(bars, 50)
         sopra200, g200, certo200 = indicatori_storici.trend_vs_ema(bars, 200)
 
@@ -1355,6 +1376,54 @@ def calendario_rows(voci):
         </tr>"""
     return rows
 
+# ─── SEGNALI DI MEDIO PERIODO (Sezione 4) ────────────────────────────────────
+_SEGNALI_BULLISH = {"Doppio minimo", "Divergenza rialzista (RSI settimanale)",
+                    "Rottura massimo 52 settimane", "Golden cross"}
+_SEGNALI_BEARISH = {"Doppio massimo", "Divergenza ribassista (RSI settimanale)",
+                    "Rottura minimo 52 settimane", "Death cross"}
+
+def _segnale_badge(tipo):
+    if tipo in _SEGNALI_BULLISH:
+        color = "#16a34a"
+    elif tipo in _SEGNALI_BEARISH:
+        color = "#dc2626"
+    else:
+        color = "#6b7280"
+    return f'<span style="color:{color};font-weight:700;white-space:nowrap">{tipo}</span>'
+
+def _formatta_dettaglio_segnale(s):
+    tipo = s.get("tipo", "")
+    if tipo in ("Doppio massimo", "Doppio minimo"):
+        return (f"Picchi del {s['data_picco1'].strftime('%d/%m/%Y')} e {s['data_picco2'].strftime('%d/%m/%Y')}, "
+                f"distanza {s['distanza_pct']}%. Livello di conferma: {s['livello_conferma']}.")
+    if "Divergenza" in tipo:
+        return (f"{s['prezzo'].capitalize()} tra il {s['data_primo'].strftime('%d/%m/%Y')} "
+                f"e il {s['data_secondo'].strftime('%d/%m/%Y')}: RSI da {s['rsi_primo']} a {s['rsi_secondo']}.")
+    if "Rottura" in tipo:
+        return f"Il {s['data'].strftime('%d/%m/%Y')}, livello precedente {s['livello_precedente']}."
+    if tipo in ("Golden cross", "Death cross"):
+        durata = f"{s['giorni_da_incrocio']}gg" if s["certo"] else f"almeno {s['giorni_da_incrocio']}gg"
+        return f"EMA50/200 su candele settimanali, da {durata}."
+    if tipo == "Volume anomalo":
+        return f"Il {s['data'].strftime('%d/%m/%Y')}, {s['rapporto']}x la media a 50 giorni."
+    return ""
+
+def segnali_medio_periodo_rows(items):
+    """items: lista di (nome, symbol, categoria, lista_segnali)."""
+    righe = ""
+    for nome, symbol, categoria, segnali in items:
+        for s in segnali:
+            righe += f"""<tr>
+                <td><strong>{nome}</strong><br><span style="color:#999;font-size:11px">{symbol}</span></td>
+                <td style="font-size:12px;color:#666">{categoria}</td>
+                <td>{_segnale_badge(s['tipo'])}</td>
+                <td class="wrap"><div style="color:#444;font-size:12px">{_formatta_dettaglio_segnale(s)}</div></td>
+            </tr>"""
+    if not righe:
+        return ('<tr><td colspan="4" style="text-align:center;color:#999;padding:20px">'
+                'Nessun segnale di medio periodo rilevato oggi.</td></tr>')
+    return righe
+
 def _analysis_map(items):
     """Costruisce dict symbol→analisi con lookup fuzzy:
     indicizza con il simbolo esatto, senza suffisso (.MI/.PA/…) e senza prefisso exchange."""
@@ -1371,9 +1440,10 @@ def _analysis_map(items):
     return m
 
 def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]",
-               regole_map=None, calendario=None):
+               regole_map=None, calendario=None, segnali_items=None):
     regole_map = regole_map or {}
     calendario = calendario or []
+    segnali_items = segnali_items or []
     today = datetime.now().strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
@@ -2037,6 +2107,16 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     </table>
   </div>
 
+  <!-- SEGNALI DI MEDIO PERIODO -->
+  <div class="section">
+    <h2>Segnali di medio periodo <span class="badge-count">candele settimanali, 3-12 mesi</span></h2>
+    <table>
+      <thead><tr><th>Titolo</th><th>Fonte</th><th>Segnale</th><th>Dettaglio</th></tr></thead>
+      <tbody>{segnali_medio_periodo_rows(segnali_items)}</tbody>
+    </table>
+    <p class="empty-note">Solo sulle tue posizioni e sulla watchlist in data/watchlist.yaml — non su tutto il mercato. Un pattern non pulito non viene forzato: niente segnale è meglio di un falso segnale.</p>
+  </div>
+
   <!-- TOP 10 ETF / ETN / ETC ITALIA -->
   <div class="section">
     <h2>Top ETF / ETN / ETC (Borsa Italiana) — Momentum <span class="badge-count">{len(etfs)} oggi</span></h2>
@@ -2170,13 +2250,26 @@ def main():
     enrich_5d(etfs,      "ETP")
     enrich_5d(portfolio, "portafoglio")
 
-    logger.info("Recupero storico 2 anni per le posizioni (EMA reali, non stimate)...")
+    logger.info("Recupero storico 5 anni per le posizioni (EMA reali, non stimate)...")
     enrich_storico_esteso(portfolio, "portafoglio")
 
-    logger.info("Caricamento regole posizioni e calendario macro...")
+    logger.info("Caricamento regole posizioni, calendario macro e watchlist...")
     regole_map = regole.load_regole()
     eventi_macro = regole.load_eventi_macro()
     calendario = build_calendario(portfolio, regole_map, eventi_macro)
+    watchlist_data = get_watchlist_data(regole.load_watchlist())
+    enrich_storico_esteso(watchlist_data, "watchlist")
+
+    logger.info("Calcolo segnali di medio periodo (Sezione 4)...")
+    segnali_items = [
+        (p.get("name", p.get("symbol", "")), p.get("yf_symbol", p.get("symbol", "")), "Posizione",
+         segnali_medio_periodo.calcola_segnali(p.get("bars_storico") or []))
+        for p in portfolio
+    ] + [
+        (w.get("name", w.get("symbol", "")), w.get("yf_symbol", w.get("symbol", "")), "Watchlist",
+         segnali_medio_periodo.calcola_segnali(w.get("bars_storico") or []))
+        for w in watchlist_data
+    ]
 
     logger.info("Aggiornamento storico persistente...")
     storico.record_daily(portfolio, stocks_it + stocks_us)
@@ -2192,7 +2285,7 @@ def main():
         for p in PORTFOLIO
     ], ensure_ascii=False)
     html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base,
-                       regole_map, calendario)
+                       regole_map, calendario, segnali_items)
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
