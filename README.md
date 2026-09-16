@@ -1,5 +1,30 @@
 # trading-report
 
+## Repo pubblico: i dati sensibili vivono nei GitHub Secrets, mai nei file
+
+Questo repo è **pubblico** (serve a GitHub Pages sul piano Free). Dossier
+XLS, mappa ISIN, regole di posizione e watchlist sono dati personali:
+vanno impostati come **Settings → Secrets and variables → Actions**, mai
+committati come file. I file in `data/` restano template vuoti — se li
+trovi non vuoti, è un errore da correggere subito, non un dato da lasciare lì.
+
+| Secret | Sostituisce | Formato |
+|---|---|---|
+| `MOVIMENTI_XLSX_B64` | `data/movimenti_dossier.xlsx` | il file XLS in base64 (`base64 -i movimenti.xlsx \| pbcopy`) |
+| `ISIN_MAP_JSON` | `data/isin_map.json` | il JSON come stringa |
+| `REGOLE_POSIZIONI_YAML` | `data/regole_posizioni.yaml` | il YAML come stringa |
+| `WATCHLIST_YAML` | `data/watchlist.yaml` | il YAML come stringa (facoltativo) |
+| `STORICO_SALT` | — | una stringa a caso, lunga, generata una volta (es. `openssl rand -hex 32`) |
+
+`STORICO_SALT` è quello che rende innocuo lo storico persistente
+committato ogni giorno (sotto): senza, il repo pubblico mostrerebbe i
+tuoi ISIN/ticker reali in chiaro in `data/storico_indicatori.csv`. **Se
+manca, il workflow lo segnala nei log ma non si ferma** — non lasciarlo
+senza per più di un run.
+
+Il vecchio secret `PORTFOLIO_JSON` resta come ripiego se non hai ancora
+impostato `MOVIMENTI_XLSX_B64`: stesso principio, mai un file committato.
+
 ## Sincronizzazione posizioni (conto B)
 
 Le posizioni aperte non si aggiornano più a mano: vengono ricostruite in FIFO
@@ -7,9 +32,9 @@ dall'export del broker.
 
 1. Esporta dal tuo dossier titoli il file "Movimenti Dossier Titoli" (colonne:
    Operazione, Data valuta, Descrizione, Titolo, ISIN, Segno A/V, Quantità,
-   Divisa, Prezzo, Cambio, Controvalore) e salvalo come
-   `data/movimenti_dossier.xlsx`, committandolo nel repo.
-2. Mappa ogni ISIN a un ticker TradingView in `data/isin_map.json`:
+   Divisa, Prezzo, Cambio, Controvalore) e mettilo nel secret
+   `MOVIMENTI_XLSX_B64` (base64), **non committarlo**.
+2. Mappa ogni ISIN a un ticker TradingView nel secret `ISIN_MAP_JSON`:
    ```json
    {
      "IT0003132476": { "tv_symbol": "MIL:ENI", "name": "Eni", "type": "Azione" }
@@ -19,15 +44,17 @@ dall'export del broker.
    `TICKER` per i titoli USA. `type` è `Azione` o `ETF`. Gli ISIN non mappati
    compaiono nei log del workflow con un warning, e il titolo resta nel
    report senza dati tecnici finché non lo mappi.
-3. Ogni run del report rilegge il file e ricalcola le posizioni aperte:
+3. Ogni run del report rilegge il dossier e ricalcola le posizioni aperte:
    quelle chiuse (quantità residua zero) spariscono automaticamente.
 
 ## Regole di posizione e calendario
 
-`data/regole_posizioni.yaml` (stop, target, data di revisione, tesi, eventi
-per titolo) e `data/eventi_macro.yaml` (riunioni BCE/Fed) — schema e istruzioni
-nei commenti dei due file. Il report confronta lo stato attuale con questi
-valori, non genera giudizi propri.
+Stop, target, data di revisione, tesi, eventi per titolo: nel secret
+`REGOLE_POSIZIONI_YAML` (schema nei commenti di `data/regole_posizioni.yaml`,
+che resta il template vuoto). `data/eventi_macro.yaml` (riunioni BCE/Fed)
+invece resta un file committato normale: sono date ufficiali pubbliche, non
+dati tuoi. Il report confronta lo stato attuale con le regole scritte, non
+genera giudizi propri.
 
 ## Il prompt AI descrive, non consiglia
 
@@ -68,6 +95,14 @@ questo richiede davvero che il tempo passi, perché dipende da cosa succede
 dopo la segnalazione, non da storico di mercato già esistente. Resta anche
 il ripiego di prima istanza se Yahoo non risponde per una posizione.
 
+Questo file **è committato ogni giorno dal workflow**, in un repo pubblico.
+Con il secret `STORICO_SALT` impostato, ISIN e symbol vengono pseudonimizzati
+(hash HMAC-SHA256, chiave = il secret) prima di scrivere: chi guarda il repo
+vede hash, non i tuoi ISIN/ticker reali — solo chi conosce il secret può
+farli corrispondere di nuovo. **Senza `STORICO_SALT`, questo file contiene
+ISIN e ticker reali in chiaro**, visibili a chiunque: impostalo prima del
+primo run, non dopo.
+
 Cresce di poche decine di righe al giorno (qualche MB all'anno): non è
 previsto un meccanismo di pulizia perché non ne ha bisogno nel breve-medio
 termine.
@@ -80,11 +115,11 @@ dei massimi/minimi a 52 settimane, golden/death cross EMA50-EMA200 (con la
 durata reale, non stimata). Il volume anomalo resta invece su base
 **giornaliera** (media a 50 giorni), per richiesta esplicita.
 
-Calcolati solo sulle posizioni aperte e sulla watchlist scritta a mano in
-`data/watchlist.yaml` (schema nei commenti del file) — non su tutto il
-mercato. Un pattern non pulito (picchi troppo distanti in livello, nessun
-ritracciamento vero) non viene forzato: niente segnale è meglio di un falso
-segnale.
+Calcolati solo sulle posizioni aperte e sulla watchlist scritta a mano nel
+secret `WATCHLIST_YAML` (schema nei commenti di `data/watchlist.yaml`) —
+non su tutto il mercato. Un pattern non pulito (picchi troppo distanti in
+livello, nessun ritracciamento vero) non viene forzato: niente segnale è
+meglio di un falso segnale.
 
 Questo repo contiene dati finanziari personali (quantità, prezzi, ISIN) ed è
 pensato per restare **privato**.

@@ -37,6 +37,13 @@ jobs:
           PORTFOLIO_JSON: ${{ secrets.PORTFOLIO_JSON }}
           PORTFOLIO_INPUT: ${{ inputs.portfolio_json }}
           SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          # Repo pubblico: dati personali (dossier, ISIN, regole, watchlist,
+          # sale per pseudonimizzare lo storico) SOLO da secret, mai committati.
+          MOVIMENTI_XLSX_B64: ${{ secrets.MOVIMENTI_XLSX_B64 }}
+          ISIN_MAP_JSON: ${{ secrets.ISIN_MAP_JSON }}
+          REGOLE_POSIZIONI_YAML: ${{ secrets.REGOLE_POSIZIONI_YAML }}
+          WATCHLIST_YAML: ${{ secrets.WATCHLIST_YAML }}
+          STORICO_SALT: ${{ secrets.STORICO_SALT }}
         run: python generate_report.py
 
       - name: Salva portafoglio aggiornato come secret

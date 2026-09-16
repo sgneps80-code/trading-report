@@ -27,7 +27,7 @@ _portfolio_input = os.environ.get("PORTFOLIO_INPUT", "").strip()
 if _portfolio_input:
     PORTFOLIO = json.loads(_portfolio_input)
     logger.info("Portfolio caricato da workflow_dispatch (override manuale)")
-elif os.path.exists(portfolio_sync.MOVIMENTI_PATH):
+elif portfolio_sync.dossier_disponibile():
     PORTFOLIO = portfolio_sync.sync_portfolio()
     logger.info(f"Portfolio sincronizzato da dossier XLS: {len(PORTFOLIO)} posizioni aperte")
 else:

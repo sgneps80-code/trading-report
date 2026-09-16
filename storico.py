@@ -17,8 +17,16 @@ segnali. CSV append-only (non SQLite): un file SQLite riscritto ogni giorno
 produce un blob binario diverso ad ogni commit, illeggibile nei diff e via
 via piu' pesante nella storia git; un CSV con solo righe nuove resta
 leggero e ispezionabile.
+
+Il repo e' pubblico: ISIN e ticker vengono pseudonimizzati (HMAC-SHA256
+troncato, chiave = secret STORICO_SALT) prima di scrivere il CSV. Chi
+guarda il repo vede hash, non i tuoi titoli reali; il codice, che conosce
+il secret, ricalcola lo stesso hash per rileggere la propria storia. Senza
+STORICO_SALT (uso locale) i valori restano in chiaro, con un avviso.
 """
 import csv
+import hashlib
+import hmac
 import logging
 import os
 from datetime import date, datetime
@@ -26,10 +34,27 @@ from datetime import date, datetime
 logger = logging.getLogger(__name__)
 
 STORICO_PATH = os.environ.get("STORICO_PATH", "data/storico_indicatori.csv")
+STORICO_SALT = os.environ.get("STORICO_SALT", "")
 
 _FIELDS = ["data", "categoria", "symbol", "isin", "close", "high", "low", "volume", "vol_10d",
            "rsi", "ema20", "ema50", "ema200", "macd_hist", "perf_1m", "perf_3m"]
 _NUMERICI = [c for c in _FIELDS if c not in ("data", "categoria", "symbol", "isin")]
+
+_salt_avvisato = False
+
+
+def _pseudonimizza(valore):
+    """ISIN/symbol reali -> hash stabile (stesso valore, stesso hash, sempre)
+    finche' STORICO_SALT non cambia. Senza il secret, valori in chiaro."""
+    global _salt_avvisato
+    if not valore:
+        return valore
+    if not STORICO_SALT:
+        if not _salt_avvisato:
+            logger.warning("STORICO_SALT non impostato: ISIN/symbol nello storico NON sono pseudonimizzati")
+            _salt_avvisato = True
+        return valore
+    return hmac.new(STORICO_SALT.encode(), valore.encode(), hashlib.sha256).hexdigest()[:16]
 
 
 def _num(v):
@@ -69,12 +94,15 @@ def record_daily(portfolio, segnali, path=None):
     def righe_da(items, categoria):
         out = []
         for r in items:
-            symbol = r.get("symbol") or r.get("yf_symbol")
-            if not symbol or (categoria, symbol) in esistenti:
+            symbol_raw = r.get("symbol") or r.get("yf_symbol")
+            if not symbol_raw:
+                continue
+            symbol = _pseudonimizza(symbol_raw)
+            if (categoria, symbol) in esistenti:
                 continue
             out.append({
                 "data": today, "categoria": categoria, "symbol": symbol,
-                "isin": r.get("isin") or "",
+                "isin": _pseudonimizza(r.get("isin") or ""),
                 "close": _num(r.get("price")), "high": _num(r.get("day_high")), "low": _num(r.get("day_low")),
                 "volume": _num(r.get("volume")), "vol_10d": _num(r.get("vol_10d")),
                 "rsi": _num(r.get("rsi")), "ema20": _num(r.get("ema20")), "ema50": _num(r.get("ema50")),
@@ -105,9 +133,9 @@ def load_history(symbol=None, isin=None, categoria=None, path=None):
         return []
     righe = _read_rows(path)
     if symbol:
-        righe = [r for r in righe if r["symbol"] == symbol]
+        righe = [r for r in righe if r["symbol"] == _pseudonimizza(symbol)]
     if isin:
-        righe = [r for r in righe if r["isin"] == isin]
+        righe = [r for r in righe if r["isin"] == _pseudonimizza(isin)]
     if categoria:
         righe = [r for r in righe if r["categoria"] == categoria]
     righe.sort(key=lambda r: r["data"])
@@ -134,6 +162,7 @@ def giorni_in_stato(key_value, predicate, current_value, key="isin", path=None):
     if not key_value or not os.path.exists(path):
         return None, False
 
+    key_value = _pseudonimizza(key_value) if key in ("isin", "symbol") else key_value
     righe = [r for r in _read_rows(path) if r.get(key) == key_value]
     righe.sort(key=lambda r: r["data"], reverse=True)
     if not righe:

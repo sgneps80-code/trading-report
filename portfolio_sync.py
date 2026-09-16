@@ -2,14 +2,23 @@
 """
 Sincronizzazione posizioni aperte dal dossier titoli (export XLS del broker).
 
-Legge data/movimenti_dossier.xlsx (formato "Movimenti Dossier Titoli":
-Operazione, Data valuta, Descrizione, Titolo, ISIN, Segno A/V, Quantità,
-Divisa, Prezzo, Cambio, Controvalore), ricostruisce le posizioni aperte in
-FIFO per ISIN e le mappa a ticker TradingView tramite data/isin_map.json.
+Legge il dossier (formato "Movimenti Dossier Titoli": Operazione, Data
+valuta, Descrizione, Titolo, ISIN, Segno A/V, Quantità, Divisa, Prezzo,
+Cambio, Controvalore), ricostruisce le posizioni aperte in FIFO per ISIN e
+le mappa a ticker TradingView.
+
+Il repo e' pubblico: dossier XLS e mappa ISIN sono dati personali, quindi
+non vengono committati in chiaro. Fonte primaria = GitHub Secret
+(MOVIMENTI_XLSX_B64 in base64, ISIN_MAP_JSON come stringa JSON), mai
+scritto su disco nel repo. Se il secret non c'e' (uso locale/di test),
+si legge il file committato in data/ — che quindi deve restare un
+template vuoto/pseudonimo, non i tuoi dati reali.
 
 Le posizioni chiuse (quantita residua zero dopo il FIFO) non vengono
 restituite: spariscono dal report senza bisogno di un intervento manuale.
 """
+import base64
+import io
 import json
 import logging
 import os
@@ -20,6 +29,15 @@ logger = logging.getLogger(__name__)
 
 MOVIMENTI_PATH = os.environ.get("MOVIMENTI_PATH", "data/movimenti_dossier.xlsx")
 ISIN_MAP_PATH = os.environ.get("ISIN_MAP_PATH", "data/isin_map.json")
+MOVIMENTI_XLSX_B64 = os.environ.get("MOVIMENTI_XLSX_B64", "")
+ISIN_MAP_JSON = os.environ.get("ISIN_MAP_JSON", "")
+
+
+def dossier_disponibile():
+    """True se c'e' un dossier da sincronizzare, come secret o come file
+    committato. Usato da generate_report.py per decidere se sincronizzare
+    dal dossier o ricadere sul vecchio secret PORTFOLIO_JSON."""
+    return bool(MOVIMENTI_XLSX_B64) or os.path.exists(MOVIMENTI_PATH)
 
 # Intestazioni come compaiono nell'export "Movimenti Dossier Titoli", normalizzate
 # in minuscolo. L'ordine delle colonne nel file non conta: si legge per nome.
@@ -72,7 +90,8 @@ def _parse_date(v):
 
 
 def read_movimenti(path=None):
-    """Legge il file XLS e restituisce una lista di movimenti normalizzati.
+    """Legge il dossier XLS (secret MOVIMENTI_XLSX_B64 se presente, altrimenti
+    il file committato) e restituisce una lista di movimenti normalizzati.
     Righe non riconducibili a un acquisto/vendita di un titolo (cedole,
     commissioni, bonifici...) vengono scartate silenziosamente: non hanno
     un ISIN, un Segno A/V valido o una quantita'."""
@@ -82,11 +101,21 @@ def read_movimenti(path=None):
     except ImportError:
         logger.error("openpyxl non installato: impossibile leggere il dossier XLS")
         return []
-    if not os.path.exists(path):
-        logger.warning(f"Dossier movimenti non trovato: {path}")
+
+    if MOVIMENTI_XLSX_B64:
+        try:
+            sorgente = io.BytesIO(base64.b64decode(MOVIMENTI_XLSX_B64))
+            logger.info("Dossier movimenti letto dal secret MOVIMENTI_XLSX_B64")
+        except Exception as e:
+            logger.error(f"MOVIMENTI_XLSX_B64 illeggibile ({e})")
+            return []
+    elif os.path.exists(path):
+        sorgente = path
+    else:
+        logger.warning(f"Dossier movimenti non trovato: né secret MOVIMENTI_XLSX_B64 né {path}")
         return []
 
-    wb = load_workbook(path, data_only=True, read_only=True)
+    wb = load_workbook(sorgente, data_only=True, read_only=True)
     ws = wb.active
     rows = ws.iter_rows(values_only=True)
     header = next(rows, None)
@@ -180,9 +209,17 @@ def build_fifo_positions(movimenti):
 
 
 def load_isin_map(path=None):
+    """Mappa ISIN -> ticker TradingView: secret ISIN_MAP_JSON se presente,
+    altrimenti il file committato (che deve restare un template vuoto)."""
+    if ISIN_MAP_JSON:
+        try:
+            return json.loads(ISIN_MAP_JSON)
+        except Exception as e:
+            logger.warning(f"ISIN_MAP_JSON illeggibile ({e})")
+            return {}
     path = path or ISIN_MAP_PATH
     if not os.path.exists(path):
-        logger.warning(f"Mappa ISIN→TradingView non trovata: {path}")
+        logger.warning(f"Mappa ISIN→TradingView non trovata: né secret ISIN_MAP_JSON né {path}")
         return {}
     try:
         with open(path, encoding="utf-8") as f:

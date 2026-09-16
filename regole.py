@@ -13,6 +13,13 @@ versionato da aggiornare una volta l'anno.
 Legge anche data/watchlist.yaml: i titoli, oltre alle posizioni aperte, su
 cui calcolare i segnali di medio periodo (Sezione 4) — scritta a mano,
 niente scansione di tutto il mercato.
+
+Il repo e' pubblico: regole (stop/target/tesi) e watchlist sono dati
+personali. Fonte primaria = GitHub Secret (REGOLE_POSIZIONI_YAML,
+WATCHLIST_YAML, entrambi YAML come stringa), mai committato in chiaro.
+Senza secret si legge il file in data/ — che deve restare un template
+vuoto. Le date BCE/Fed non sono sensibili: eventi_macro.yaml resta
+sempre un file committato normale.
 """
 import logging
 import os
@@ -23,6 +30,8 @@ logger = logging.getLogger(__name__)
 REGOLE_PATH = os.environ.get("REGOLE_PATH", "data/regole_posizioni.yaml")
 EVENTI_MACRO_PATH = os.environ.get("EVENTI_MACRO_PATH", "data/eventi_macro.yaml")
 WATCHLIST_PATH = os.environ.get("WATCHLIST_PATH", "data/watchlist.yaml")
+REGOLE_POSIZIONI_YAML = os.environ.get("REGOLE_POSIZIONI_YAML", "")
+WATCHLIST_YAML = os.environ.get("WATCHLIST_YAML", "")
 
 _NOMI_MACRO = {"bce": "Riunione BCE", "fed": "Riunione Fed (FOMC)"}
 
@@ -55,14 +64,26 @@ def _load_yaml(path):
         return None
 
 
+def _load_yaml_source(secret_value, path, nome_secret):
+    """Secret (stringa YAML) se presente, altrimenti il file committato."""
+    if secret_value:
+        try:
+            import yaml
+            return yaml.safe_load(secret_value) or {}
+        except Exception as e:
+            logger.warning(f"{nome_secret} illeggibile ({e})")
+            return None
+    return _load_yaml(path)
+
+
 def load_regole(path=None):
     """Restituisce {isin: {stop, target, revisione, tesi, eventi}}.
     Un ISIN senza voce nel file ha semplicemente tutti i campi assenti:
     il report lo segnala come 'nessuna regola scritta', non e' un errore."""
     path = path or REGOLE_PATH
-    raw = _load_yaml(path)
+    raw = _load_yaml_source(REGOLE_POSIZIONI_YAML, path, "REGOLE_POSIZIONI_YAML")
     if raw is None:
-        logger.warning(f"File regole posizioni non trovato o illeggibile: {path}")
+        logger.warning(f"Regole posizioni non trovate: né secret REGOLE_POSIZIONI_YAML né {path}")
         return {}
 
     out = {}
@@ -108,9 +129,9 @@ def load_watchlist(path=None):
     """Titoli da monitorare per i segnali di medio periodo (Sezione 4), oltre
     alle posizioni aperte. Restituisce [{"symbol", "name"}]."""
     path = path or WATCHLIST_PATH
-    raw = _load_yaml(path)
+    raw = _load_yaml_source(WATCHLIST_YAML, path, "WATCHLIST_YAML")
     if raw is None:
-        logger.warning(f"Watchlist non trovata o illeggibile: {path}")
+        logger.warning(f"Watchlist non trovata: né secret WATCHLIST_YAML né {path}")
         return []
 
     out = []
