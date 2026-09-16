@@ -22,5 +22,25 @@ dall'export del broker.
 3. Ogni run del report rilegge il file e ricalcola le posizioni aperte:
    quelle chiuse (quantità residua zero) spariscono automaticamente.
 
+## Regole di posizione e calendario
+
+`data/regole_posizioni.yaml` (stop, target, data di revisione, tesi, eventi
+per titolo) e `data/eventi_macro.yaml` (riunioni BCE/Fed) — schema e istruzioni
+nei commenti dei due file. Il report confronta lo stato attuale con questi
+valori, non genera giudizi propri.
+
+## Storico persistente
+
+`data/storico_indicatori.csv` accumula una riga al giorno per ogni posizione
+aperta e per ogni titolo uscito in "Da approfondire" (prezzo, RSI, EMA,
+MACD, performance). Viene scritto automaticamente dal workflow e committato
+insieme al report — non richiede manutenzione. Serve a due cose:
+- calcolare i segnali di medio periodo su base settimanale (in arrivo);
+- verificare, col tempo, se i segnali del report si sono confermati o no.
+
+Cresce di poche decine di righe al giorno (qualche MB all'anno): non è
+previsto un meccanismo di pulizia perché non ne ha bisogno nel breve-medio
+termine.
+
 Questo repo contiene dati finanziari personali (quantità, prezzi, ISIN) ed è
 pensato per restare **privato**.

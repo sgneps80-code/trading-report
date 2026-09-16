@@ -12,7 +12,7 @@ import requests
 import anthropic
 import portfolio_sync
 import regole
-import trend_log
+import storico
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -222,6 +222,8 @@ def parse_tv_row(row, cols=None):
         "macd_hist":  hist,      # usato per filtro Python
         "candle_d":   candle_d,
         "candle_w":   candle_w,
+        "day_high":   h_day or None,   # per il resample settimanale dello storico (Fase 4/5)
+        "day_low":    l_day or None,
         "perf_1m":    round(p1m, 1) if p1m is not None else None,
         "perf_3m":    round(p3m, 1) if p3m is not None else None,
         "trend":      trend,
@@ -1253,8 +1255,12 @@ def posizioni_rows(portfolio, regole_map):
         ema50, ema200 = p.get("ema50") or 0, p.get("ema200") or 0
         sopra50 = bool(price and ema50 and price > ema50)
         sopra200 = bool(price and ema200 and price > ema200)
-        g50, certo50 = trend_log.days_in_state(isin, "sopra_ema50", sopra50) if isin else (None, False)
-        g200, certo200 = trend_log.days_in_state(isin, "sopra_ema200", sopra200) if isin else (None, False)
+        g50, certo50 = storico.giorni_in_stato(
+            isin, lambda r: bool(r["close"] and r["ema50"] and r["close"] > r["ema50"]), sopra50
+        ) if isin else (None, False)
+        g200, certo200 = storico.giorni_in_stato(
+            isin, lambda r: bool(r["close"] and r["ema200"] and r["close"] > r["ema200"]), sopra200
+        ) if isin else (None, False)
         price_str = f"{price:.2f}" if price else "n.d."
         divisa = p.get("divisa") or ""
         tesi = regola.get("tesi") or ""
@@ -2104,8 +2110,10 @@ def main():
     logger.info("Caricamento regole posizioni e calendario macro...")
     regole_map = regole.load_regole()
     eventi_macro = regole.load_eventi_macro()
-    trend_log.append_today(portfolio)
     calendario = build_calendario(portfolio, regole_map, eventi_macro)
+
+    logger.info("Aggiornamento storico persistente...")
+    storico.record_daily(portfolio, stocks_it + stocks_us)
 
     logger.info("Generating analysis with Claude...")
     analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
