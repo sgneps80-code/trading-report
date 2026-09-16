@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+Regole di posizione (Fase 3): stop, target, data di revisione, tesi ed
+eventi noti per ogni ISIN, scritti a mano in data/regole_posizioni.yaml.
+Il report confronta lo stato attuale con questi valori — non genera
+giudizi propri (niente "compra/vendi": solo fatti da mettere a confronto
+con quello che hai scritto tu).
+
+Legge anche data/eventi_macro.yaml (riunioni BCE/Fed): sono date ufficiali
+pubbliche, non richiedono un provider a pagamento, quindi restano un file
+versionato da aggiornare una volta l'anno.
+"""
+import logging
+import os
+from datetime import date, datetime
+
+logger = logging.getLogger(__name__)
+
+REGOLE_PATH = os.environ.get("REGOLE_PATH", "data/regole_posizioni.yaml")
+EVENTI_MACRO_PATH = os.environ.get("EVENTI_MACRO_PATH", "data/eventi_macro.yaml")
+
+_NOMI_MACRO = {"bce": "Riunione BCE", "fed": "Riunione Fed (FOMC)"}
+
+
+def _parse_date(v):
+    if isinstance(v, date):
+        return v
+    if v is None:
+        return None
+    try:
+        return datetime.strptime(str(v).strip(), "%Y-%m-%d").date()
+    except ValueError:
+        logger.warning(f"Data non valida ({v!r}), formato atteso YYYY-MM-DD")
+        return None
+
+
+def _load_yaml(path):
+    if not os.path.exists(path):
+        return None
+    try:
+        import yaml
+    except ImportError:
+        logger.error("PyYAML non installato: impossibile leggere " + path)
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning(f"File YAML illeggibile ({path}): {e}")
+        return None
+
+
+def load_regole(path=None):
+    """Restituisce {isin: {stop, target, revisione, tesi, eventi}}.
+    Un ISIN senza voce nel file ha semplicemente tutti i campi assenti:
+    il report lo segnala come 'nessuna regola scritta', non e' un errore."""
+    path = path or REGOLE_PATH
+    raw = _load_yaml(path)
+    if raw is None:
+        logger.warning(f"File regole posizioni non trovato o illeggibile: {path}")
+        return {}
+
+    out = {}
+    for isin, r in raw.items():
+        if not isinstance(r, dict):
+            continue  # scarta chiavi non-posizione (es. commenti promossi a chiave per errore)
+        eventi = []
+        for ev in (r.get("eventi") or []):
+            if not isinstance(ev, dict):
+                continue
+            d = _parse_date(ev.get("data"))
+            if d:
+                eventi.append({"tipo": ev.get("tipo", "evento"), "data": d})
+        out[str(isin)] = {
+            "stop": r.get("stop"),
+            "target": r.get("target"),
+            "revisione": _parse_date(r.get("revisione")),
+            "tesi": r.get("tesi", ""),
+            "eventi": eventi,
+        }
+    return out
+
+
+def load_eventi_macro(path=None):
+    """Riunioni BCE/Fed dell'anno, come lista di {data, titolo, tipo}."""
+    path = path or EVENTI_MACRO_PATH
+    raw = _load_yaml(path)
+    if raw is None:
+        logger.warning(f"Calendario macro non trovato o illeggibile: {path}")
+        return []
+
+    out = []
+    for chiave, date_list in raw.items():
+        titolo = _NOMI_MACRO.get(str(chiave).lower(), str(chiave))
+        for d in (date_list or []):
+            data = _parse_date(d)
+            if data:
+                out.append({"data": data, "titolo": titolo, "tipo": "Macro"})
+    return out

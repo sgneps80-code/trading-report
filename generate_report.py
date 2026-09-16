@@ -7,10 +7,12 @@ AI:        Anthropic Claude Haiku
 """
 
 import os, json, hashlib, logging
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import requests
 import anthropic
 import portfolio_sync
+import regole
+import trend_log
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -805,6 +807,25 @@ def get_indices():
         logger.warning(f"Indices TV fetch: {e}")
     return out
 
+# ─── CALENDARIO (Sezione 2) ───────────────────────────────────────────────────
+def build_calendario(portfolio, regole_map, eventi_macro, giorni=60):
+    """Unisce le riunioni BCE/Fed e gli eventi per-titolo scritti a mano nelle
+    regole delle posizioni aperte, filtrati sui prossimi N giorni e ordinati
+    cronologicamente. Non include eventi per titoli fuori portafoglio: la
+    watchlist configurabile arriva in Fase 5."""
+    oggi = date.today()
+    limite = oggi + timedelta(days=giorni)
+    voci = [e for e in eventi_macro if oggi <= e["data"] <= limite]
+    for p in portfolio:
+        isin = p.get("isin")
+        nome = p.get("name", isin)
+        regola = regole_map.get(isin) or {}
+        for ev in regola.get("eventi", []):
+            if oggi <= ev["data"] <= limite:
+                voci.append({"data": ev["data"], "titolo": nome, "tipo": ev.get("tipo", "evento")})
+    voci.sort(key=lambda v: v["data"])
+    return voci
+
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
 
 def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
@@ -886,43 +907,6 @@ def pct(val):
 def rating_badge(r):
     color = "#16a34a" if r == "Forte" else "#d97706"
     return f'<span style="color:{color};font-weight:700">● {r}</span>'
-
-def compute_score(r, market_delta=0):
-    """Score 0-10 composito: segnale + pattern + volume + contesto mercato."""
-    sig_label = compute_signal(r)[0]
-    pat_label = detect_pattern(r)
-
-    sig_pts = {
-        "🚀 Breakout": 3.0, "💪 Trend Forte": 2.5, "📈 Rialzista": 2.0,
-        "🔄 Rimbalzo": 1.5, "📣 Volume Spike": 1.5, "➡️ Laterale": 0.0,
-        "📊 Neutro": 0.0, "📉 Momentum ↓": -1.0, "⚠️ Ipercomprato": -0.5,
-    }.get(sig_label, 0)
-
-    pat_pts = {
-        "🔝 Breakout 52W": 2.0, "🚩 Flag Rialzista": 1.5,
-        "↩️ Pullback EMA20": 1.0, "🔁 Doppio Minimo?": 1.0,
-        "🛡️ Test Supporto": 0.5, "🔴 Resistenza": -1.0,
-        "⛰️ Doppio Picco?": -1.5,
-    }.get(pat_label, 0)
-
-    vol    = r.get("volume")  or 0
-    vol10d = r.get("vol_10d") or 1
-    vol_pts = 0.5 if (vol > vol10d * 2.5 and sig_pts > 0) else 0
-
-    mkt_pts = 0.5 if market_delta > 0 else (-0.5 if market_delta < 0 else 0)
-
-    score = sig_pts + pat_pts + vol_pts + mkt_pts
-    return max(0, min(10, score + 3))  # shift +3 per portare in range 0-10
-
-def raccomandazione_badge(score):
-    if score >= 5.5:
-        return '<span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span>'
-    elif score >= 3.5:
-        return '<span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span>'
-    elif score >= 1.5:
-        return '<span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span>'
-    else:
-        return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Evitare</span>'
 
 def etp_reco_badge(score):
     """Badge per la Rec. degli ETP, coerente con l'ordinamento (etp_total_score).
@@ -1083,11 +1067,6 @@ def detect_pattern(r):
         return "🔴 Resistenza"
     return "—"
 
-def signal_badge(s):
-    colors = {"Accumula": "#16a34a", "Riduci": "#dc2626", "Mantieni": "#d97706"}
-    c = colors.get(s, "#d97706")
-    return f'<span style="color:{c};font-weight:700">● {s}</span>'
-
 def idx_badge(val):
     if val is None:
         return '<span style="color:#999">n.d.</span>'
@@ -1185,40 +1164,125 @@ def etf_rows(lst, analysis_map, market_delta=0):
         </tr>"""
     return rows
 
-def portfolio_rows(portfolio, analysis_map, market_delta=0):
+def var_da_carico_html(price, prezzo_medio):
+    if not price or not prezzo_medio:
+        return '<span style="color:#999">n.d.</span>'
+    var = (price / prezzo_medio - 1) * 100
+    color = "#16a34a" if var >= 0 else "#dc2626"
+    return f'<span style="color:{color};font-weight:700">{var:+.1f}%</span>'
+
+def giorni_detenzione_html(giorni):
+    if giorni is None:
+        return '<span style="color:#999">n.d.</span>'
+    if giorni < 60:
+        color = "#16a34a"
+    elif giorni <= 80:
+        color = "#d97706"
+    else:
+        color = "#dc2626"
+    return f'<span style="color:{color};font-weight:700">{giorni} gg</span>'
+
+def distanza_da_livello_html(price, livello, verso_alto):
+    """verso_alto=True per il target (quanto manca, in %, perche' il prezzo
+    deve ancora salire per raggiungerlo). verso_alto=False per lo stop
+    (quanto e' sopra, in %: negativo significa che l'ha gia' rotto)."""
+    if not price or not livello:
+        return '<span style="color:#999">n.d.</span>'
+    dist = (livello / price - 1) * 100 if verso_alto else (price / livello - 1) * 100
+    color = "#dc2626" if dist < 0 else "#444"
+    return f'<span style="color:{color};font-weight:600">{dist:+.1f}%</span>'
+
+def trend_ema_html(sopra, giorni, certo, label):
+    freccia, stato = ("▲", "Sopra") if sopra else ("▼", "Sotto")
+    color = "#16a34a" if sopra else "#dc2626"
+    if giorni is None:
+        durata = ""
+    else:
+        durata = f" ({giorni}gg)" if certo else f" (almeno {giorni}gg)"
+    return f'<span style="color:{color};font-weight:600;white-space:nowrap">{freccia} {stato} {label}{durata}</span>'
+
+def eventi_prossimi_html(eventi, giorni_max=30):
+    oggi = date.today()
+    prossimi = sorted(
+        (e for e in (eventi or []) if 0 <= (e["data"] - oggi).days <= giorni_max),
+        key=lambda e: e["data"]
+    )
+    if not prossimi:
+        return '<span style="color:#999;font-size:12px">nessuno nei prossimi 30gg</span>'
+    return "<br>".join(
+        f'<span style="font-size:12px">{e["tipo"]} — {e["data"].strftime("%d/%m")}</span>'
+        for e in prossimi
+    )
+
+def note_fattuali_html(p, regola):
+    """Domande/osservazioni fattuali, non giudizi: confronta lo stato attuale
+    con i tuoi dati (storico personale) e con quello che hai scritto tu
+    (stop/target/revisione). Nessun badge Mantieni/Riduci/Evitare."""
+    note = []
+    price = p.get("price")
+    giorni = p.get("giorni_detenzione")
+    stop = (regola or {}).get("stop")
+    target = (regola or {}).get("target")
+    revisione = (regola or {}).get("revisione")
+
+    if giorni is not None and giorni > 80:
+        note.append(f"Aperta da {giorni} giorni — sopra la permanenza media dei tuoi trade perdenti (80gg).")
+    elif giorni is not None and giorni >= 60:
+        note.append(f"Aperta da {giorni} giorni — nella fascia (61-180gg) dove il tuo win rate storico scende al 32%.")
+
+    if price and stop and price <= stop:
+        note.append(f"Sotto lo stop dichiarato ({stop}).")
+    if price and target and price >= target:
+        note.append(f"Sopra il target dichiarato ({target}).")
+    if revisione and date.today() > revisione:
+        note.append(f"Data di revisione ({revisione.strftime('%d/%m/%Y')}) superata.")
+
+    if not note:
+        return '<span style="color:#999;font-size:12px">—</span>'
+    return "<br>".join(f'<span style="font-size:12px;color:#92400e">▸ {n}</span>' for n in note)
+
+def posizioni_rows(portfolio, regole_map):
+    if not portfolio:
+        return ('<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">'
+                'Nessuna posizione aperta sul conto B (dossier non ancora caricato, vedi README).</td></tr>')
     rows = ""
     for p in portfolio:
-        # yf_symbol ora è in formato TV (es. "MIL:OMER" o "PANW")
-        # Claude risponde con il ticker senza prefisso exchange (es. "OMER")
-        # → prova prima la chiave piena, poi il ticker nudo
-        sym_key = p.get("yf_symbol", p.get("symbol", ""))
-        bare_key = sym_key.split(":")[-1] if ":" in sym_key else sym_key
-        a = analysis_map.get(sym_key) or analysis_map.get(bare_key, {})
-        trend = p.get("trend", "n.d.")
-        trend_color = {
-            "Rialzista": "#16a34a", "Rialzista (>EMA200)": "#15803d",
-            "Ribassista": "#dc2626", "Laterale": "#d97706", "Sopra EMA20": "#2563eb",
-        }.get(trend, "#999")
-        price_str = f"{p['price']:.2f}" if p.get("price") else "n.d."
-        yf_sym = p.get("yf_symbol", sym_key)
+        isin = p.get("isin")
+        regola = regole_map.get(isin) or {}
+        price = p.get("price")
+        ema50, ema200 = p.get("ema50") or 0, p.get("ema200") or 0
+        sopra50 = bool(price and ema50 and price > ema50)
+        sopra200 = bool(price and ema200 and price > ema200)
+        g50, certo50 = trend_log.days_in_state(isin, "sopra_ema50", sopra50) if isin else (None, False)
+        g200, certo200 = trend_log.days_in_state(isin, "sopra_ema200", sopra200) if isin else (None, False)
+        price_str = f"{price:.2f}" if price else "n.d."
+        divisa = p.get("divisa") or ""
+        tesi = regola.get("tesi") or ""
+        tesi_html = tesi if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
+
         rows += f"""<tr>
-            <td><strong>{p['name']}</strong><br><span style="color:#999;font-size:11px">{yf_sym}</span></td>
-            <td style="font-size:12px;color:#666">{p.get('type','')}</td>
-            <td>{price_str}</td>
-            <td>{p['rsi'] if p.get('rsi') else 'n.d.'}</td>
-            <td style="color:{trend_color};font-weight:600;font-size:12px">{trend}</td>
-            <td>{pct(p.get('perf_1m'))}</td>
-            <td>{pct(p.get('perf_3m'))}</td>
-            <td>{pct(p.get('perf_5d'))}</td>
-            <td>{candles_5d_svg(p.get('bars_5d'))}</td>
-            <td>{candle_badge(p.get('candle_d','—'))}</td>
-            <td>{candle_badge(p.get('candle_w','—'))}</td>
-            <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
-            <td>{_composite_badge(*compute_signal(p))}</td>
-            <td style="font-size:12px">{detect_pattern(p)}</td>
-            <td>{raccomandazione_badge(compute_score(p, market_delta))}</td>
-            <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
-            <td class="wrap"><div style="color:#444">{a.get('motivazione','')}</div></td>
+            <td><strong>{p.get('name', p.get('symbol',''))}</strong><br><span style="color:#999;font-size:11px">{p.get('yf_symbol', p.get('symbol',''))}</span></td>
+            <td>{price_str} {divisa}</td>
+            <td>{var_da_carico_html(price, p.get('prezzo_medio'))}</td>
+            <td>{giorni_detenzione_html(p.get('giorni_detenzione'))}</td>
+            <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}</td>
+            <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}</td>
+            <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
+            <td>{eventi_prossimi_html(regola.get('eventi'))}</td>
+            <td>{note_fattuali_html(p, regola)}</td>
+            <td class="wrap"><div style="color:#444;font-size:12px">{tesi_html}</div></td>
+        </tr>"""
+    return rows
+
+def calendario_rows(voci):
+    if not voci:
+        return '<tr><td colspan="3" style="text-align:center;color:#999;padding:20px">Nessun evento nei prossimi 60 giorni.</td></tr>'
+    rows = ""
+    for v in voci:
+        rows += f"""<tr>
+            <td style="white-space:nowrap">{v['data'].strftime('%d/%m/%Y')}</td>
+            <td>{v['tipo']}</td>
+            <td>{v['titolo']}</td>
         </tr>"""
     return rows
 
@@ -1237,14 +1301,16 @@ def _analysis_map(items):
             m.setdefault(bare.split(":")[-1], a)
     return m
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]"):
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]",
+               regole_map=None, calendario=None):
+    regole_map = regole_map or {}
+    calendario = calendario or []
     today = datetime.now().strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
     sm_it  = _analysis_map(analysis.get("stocks_it_analysis", []))
     sm_us  = _analysis_map(analysis.get("stocks_us_analysis", []))
     em     = _analysis_map(analysis.get("etfs_analysis", []))
-    pm     = _analysis_map(analysis.get("portfolio_analysis", []))
 
     # Contesto di mercato per Raccomandazione
     mkt_it = indices.get("FTSE MIB") or 0
@@ -1848,6 +1914,29 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 
 <div class="container">
 
+  <!-- LE MIE POSIZIONI -->
+  <div class="section">
+    <h2>Le mie posizioni <span class="badge-count">{len(portfolio)} aperte</span></h2>
+    <table>
+      <thead><tr>
+        <th>Titolo</th><th>Prezzo</th><th>Var. da carico</th><th>Giorni detenzione</th>
+        <th>Distanza da stop</th><th>Distanza da target</th><th>Trend medio periodo</th>
+        <th>Eventi (30gg)</th><th>Da notare</th><th>Tesi scritta</th>
+      </tr></thead>
+      <tbody>{posizioni_rows(portfolio, regole_map)}</tbody>
+    </table>
+    <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto in data/regole_posizioni.yaml. La decisione resta tua.</p>
+  </div>
+
+  <!-- CALENDARIO -->
+  <div class="section">
+    <h2>Calendario <span class="badge-count">prossimi 60 giorni</span></h2>
+    <table>
+      <thead><tr><th>Data</th><th>Tipo</th><th>Titolo</th></tr></thead>
+      <tbody>{calendario_rows(calendario)}</tbody>
+    </table>
+  </div>
+
   <!-- CONTESTO DI MERCATO -->
   <div class="section">
     <h2>Contesto di Mercato</h2>
@@ -1889,18 +1978,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       </tr></thead>
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
-  </div>
-
-  <!-- PORTAFOGLIO -->
-  <div class="section">
-    <h2>💼 Portafoglio — Analisi Tecnica</h2>
-    <table>
-      <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Operativo</th><th>Analisi</th>
-      </tr></thead>
-      <tbody>{portfolio_rows(portfolio, pm, (mkt_it + mkt_us) / 2)}</tbody>
-    </table>
-    <div class="sintesi"><strong>Sintesi operativa:</strong> {analysis.get('sintesi_portafoglio','')}</div>
   </div>
 
   <!-- AGGIORNA PORTAFOGLIO -->
@@ -2024,6 +2101,12 @@ def main():
     enrich_5d(etfs,      "ETP")
     enrich_5d(portfolio, "portafoglio")
 
+    logger.info("Caricamento regole posizioni e calendario macro...")
+    regole_map = regole.load_regole()
+    eventi_macro = regole.load_eventi_macro()
+    trend_log.append_today(portfolio)
+    calendario = build_calendario(portfolio, regole_map, eventi_macro)
+
     logger.info("Generating analysis with Claude...")
     analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
 
@@ -2034,7 +2117,8 @@ def main():
         {"symbol": p["symbol"], "name": p.get("name", p["symbol"]), "type": p.get("type", "Azione")}
         for p in PORTFOLIO
     ], ensure_ascii=False)
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base)
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base,
+                       regole_map, calendario)
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:
