@@ -7,21 +7,32 @@ AI:        Anthropic Claude Haiku
 """
 
 import os, json, hashlib, logging
-from datetime import datetime
+from datetime import datetime, date, timedelta, timezone
 import requests
 import anthropic
+import portfolio_sync
+import regole
+import storico
+import indicatori_storici
+import segnali_medio_periodo
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ─── PORTFOLIO ────────────────────────────────────────────────────────────────
+# Priorita': override manuale da workflow_dispatch > dossier XLS sincronizzato
+# (fonte primaria, vedi portfolio_sync.py) > vecchio secret JSON come ripiego,
+# per non rompere il report se il dossier non e' stato ancora caricato nel repo.
 _portfolio_input = os.environ.get("PORTFOLIO_INPUT", "").strip()
 if _portfolio_input:
     PORTFOLIO = json.loads(_portfolio_input)
-    logger.info("Portfolio caricato da workflow_dispatch")
+    logger.info("Portfolio caricato da workflow_dispatch (override manuale)")
+elif os.path.exists(portfolio_sync.MOVIMENTI_PATH):
+    PORTFOLIO = portfolio_sync.sync_portfolio()
+    logger.info(f"Portfolio sincronizzato da dossier XLS: {len(PORTFOLIO)} posizioni aperte")
 else:
     PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
-    logger.info("Portfolio caricato da PORTFOLIO_JSON secret")
+    logger.info("Portfolio caricato da PORTFOLIO_JSON secret (legacy: nessun dossier XLS trovato)")
 
 # ─── TRADINGVIEW API ──────────────────────────────────────────────────────────
 TV_HEADERS = {
@@ -50,7 +61,8 @@ TV_COLS = [
     "MACD.signal",              # MACD signal line
     "MACD.hist",                # MACD histogram (conferma forza del segnale)
     "change|1M",                # performance 1 mese %
-    "change|3M",                # performance 3 mesi %
+    "Perf.3M",                  # performance 3 mesi % (campo nativo: "change|3M" non esiste,
+                                 # |3M non e' una risoluzione valida e torna sempre nullo)
     "Rec.All",                  # raccomandazione aggregata TV: -1 vendi forte → +1 compra forte
     "market_cap_basic",         # capitalizzazione di mercato
     "open|1W",                  # apertura settimanale (per candele 1W)
@@ -143,7 +155,7 @@ def parse_tv_row(row, cols=None):
     sig    = d.get("MACD.signal") or 0
     hist   = d.get("MACD.hist")   or (macd - sig)
     p1m    = d.get("change|1M")
-    p3m    = d.get("change|3M")
+    p3m    = d.get("Perf.3M")
     rec    = d.get("Rec.All") or 0
     vol    = d.get("volume")                 or 0
     vol10d = d.get("average_volume_10d_calc") or 0
@@ -212,6 +224,8 @@ def parse_tv_row(row, cols=None):
         "macd_hist":  hist,      # usato per filtro Python
         "candle_d":   candle_d,
         "candle_w":   candle_w,
+        "day_high":   h_day or None,   # per il resample settimanale dello storico (Fase 4/5)
+        "day_low":    l_day or None,
         "perf_1m":    round(p1m, 1) if p1m is not None else None,
         "perf_3m":    round(p3m, 1) if p3m is not None else None,
         "trend":      trend,
@@ -244,9 +258,17 @@ def momentum_score(d):
     )
 
 # ─── HELPER FILTRO PYTHON ────────────────────────────────────────────────────
-def _passes_momentum(r, min_price=0.2, min_perf1m=0):
+MIN_LIQUIDITY_EUR = 200_000  # controvalore medio giornaliero minimo (prezzo x volume medio 10gg)
+
+def _passes_momentum(r, min_price=0.2, min_perf1m=0, min_liquidity=MIN_LIQUIDITY_EUR):
     """Filtro applicato in Python dopo la risposta TV (evita cross-column filter API)."""
     if not r.get("price") or r["price"] < min_price:
+        return False
+    # Liquidita': scarta i titoli su cui non si riuscirebbe a uscire facilmente.
+    # Approssimazione: soglia applicata nella valuta nativa del titolo (EUR per l'Italia,
+    # USD per gli USA), senza conversione di cambio — i due tassi sono vicini a parita'
+    # e la soglia serve a scartare le microcap illiquide, non a essere precisa al centesimo.
+    if r["price"] * (r.get("vol_10d") or 0) < min_liquidity:
         return False
     ema20 = r.get("ema20") or 0
     ema50 = r.get("ema50") or 0
@@ -260,6 +282,18 @@ def _passes_momentum(r, min_price=0.2, min_perf1m=0):
     if (r.get("macd_hist") or 0) <= 0:
         return False
     return True
+
+def classify_trend_rimbalzo(r):
+    """TREND: sale a 1M E a 3M. RIMBALZO: sale a 1M ma e' ancora sotto lo zero a 3M.
+    None se il 3M non e' disponibile (non dovrebbe accadere dopo il fix di Perf.3M)."""
+    p1m, p3m = r.get("perf_1m"), r.get("perf_3m")
+    if p1m is None or p3m is None:
+        return None
+    if p1m > 0 and p3m > 0:
+        return "TREND"
+    if p1m > 0 and p3m < 0:
+        return "RIMBALZO"
+    return None
 
 # ─── SCREENER ITALIA (tutti i titoli quotati su Borsa Italiana) ───────────────
 def screen_italy():
@@ -283,8 +317,8 @@ def screen_italy():
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
     rows = [r for r in rows if _passes_momentum(r, min_price=0.2, min_perf1m=0)]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"Italia: {len(rows)} titoli → top {min(10, len(rows))}")
-    return rows[:10]
+    logger.info(f"Italia: {len(rows)} titoli → top {min(5, len(rows))}")
+    return rows[:5]
 
 # ─── SCREENER USA (large + mid + small cap) ───────────────────────────────────
 def screen_usa():
@@ -307,8 +341,8 @@ def screen_usa():
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
     rows = [r for r in rows if _passes_momentum(r, min_price=1.0, min_perf1m=1)]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"USA: {len(rows)} titoli → top {min(10, len(rows))}")
-    return rows[:10]
+    logger.info(f"USA: {len(rows)} titoli → top {min(5, len(rows))}")
+    return rows[:5]
 
 # ─── SCREENER ETF / ETN / ETC (solo Borsa Italiana) ───────────────────────────
 _ETP_TYPESPECS = {"etf", "etn", "etc", "etp"}
@@ -610,6 +644,44 @@ def fetch_5d_ohlc(tv_symbol):
         logger.warning(f"5gg OHLC {ysym}: {e}")
         return []
 
+def fetch_ohlc_range(tv_symbol, range_="2y", interval="1d"):
+    """Storico OHLC reale da Yahoo Finance (stesso endpoint di fetch_5d_ohlc,
+    solo con una finestra piu' ampia). Serve per calcolare indicatori di
+    medio periodo su dati di mercato VERI fin dal primo run, invece di
+    aspettare che il nostro log giornaliero (storico.py) si accumuli per
+    mesi: quel log non puo' essere retrodatato, la storia dei prezzi si'.
+    Restituisce [] in caso di errore, senza rompere il report."""
+    ysym = tv_to_yahoo_symbol(tv_symbol)
+    if not ysym:
+        return []
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+           f"?range={range_}&interval={interval}")
+    try:
+        r = requests.get(url, headers=_YF_HEADERS, timeout=15)
+        if r.status_code != 200:
+            logger.warning(f"Storico OHLC {ysym}: HTTP {r.status_code}")
+            return []
+        res = (r.json().get("chart") or {}).get("result") or []
+        if not res:
+            return []
+        timestamps = res[0].get("timestamp") or []
+        quotes = (res[0].get("indicators") or {}).get("quote") or [{}]
+        q = quotes[0]
+        o, h, l, c, v = (q.get(k) or [] for k in ("open", "high", "low", "close", "volume"))
+        bars = []
+        for i in range(min(len(timestamps), len(o), len(h), len(l), len(c))):
+            if None in (o[i], h[i], l[i], c[i]):
+                continue
+            bars.append({
+                "data": datetime.fromtimestamp(timestamps[i], tz=timezone.utc).date(),
+                "o": o[i], "h": h[i], "l": l[i], "c": c[i],
+                "v": v[i] if v and i < len(v) and v[i] is not None else None,
+            })
+        return bars
+    except Exception as e:
+        logger.warning(f"Storico OHLC {ysym}: {e}")
+        return []
+
 def enrich_5d(rows, etichetta=""):
     """Aggiunge bars_5d e perf_5d a ogni riga. Fallisce in silenzio sul singolo titolo."""
     for r in rows:
@@ -620,6 +692,19 @@ def enrich_5d(rows, etichetta=""):
             r["perf_5d"] = round((bars[-1]["c"] / bars[0]["c"] - 1) * 100, 1)
         else:
             r["perf_5d"] = None
+
+def enrich_storico_esteso(rows, etichetta="", range_="5y"):
+    """Aggiunge bars_storico (OHLC giornaliero reale, 5 anni) a ogni riga:
+    serve sia alle EMA giornaliere di Sezione 1 sia ai segnali settimanali
+    di Sezione 4, che richiedono almeno ~200 settimane (~4 anni) di storico
+    per un'EMA200 settimanale valida — 2 anni non basterebbero.
+    Fallisce in silenzio sul singolo titolo (vedi fetch_ohlc_range)."""
+    for r in rows:
+        sym = r.get("tv_symbol") or r.get("yf_symbol") or r.get("symbol")
+        r["bars_storico"] = fetch_ohlc_range(sym, range_)
+    ok = sum(1 for r in rows if r.get("bars_storico"))
+    logger.info(f"Storico {range_}{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
+    return rows
     ok = sum(1 for r in rows if r.get("bars_5d"))
     logger.info(f"5gg OHLC{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
     return rows
@@ -739,6 +824,33 @@ def get_portfolio_data():
                 "rec_str": "n.d.", "rec": 0,
                 "candle_d": "—", "candle_w": "—",
             }
+        # Campi ricostruiti dal dossier XLS (portfolio_sync): assenti se il
+        # portafoglio arriva ancora dal vecchio secret PORTFOLIO_JSON.
+        parsed["isin"]              = item.get("isin")
+        parsed["quantita"]          = item.get("quantita")
+        parsed["prezzo_medio"]      = item.get("prezzo_medio")
+        parsed["divisa"]            = item.get("divisa")
+        parsed["data_apertura"]     = item.get("data_apertura")
+        parsed["giorni_detenzione"] = item.get("giorni_detenzione")
+        out.append(parsed)
+    return out
+
+def get_watchlist_data(watchlist):
+    """Dati tecnici correnti per la watchlist (Sezione 4), stesso meccanismo
+    di get_portfolio_data. Se un simbolo non risolve su TV, resta comunque
+    nella lista con dati 'n.d.': i segnali di medio periodo funzionano lo
+    stesso, perche' vengono calcolati sullo storico Yahoo, non su questi campi."""
+    if not watchlist:
+        return []
+    syms = [w["symbol"] for w in watchlist]
+    results = _tv_fetch_symbols(syms)
+    out = []
+    for w in watchlist:
+        sym = w["symbol"]
+        ticker = sym.split(":")[-1] if ":" in sym else sym
+        parsed = results.get(sym) or results.get(ticker) or {"symbol": ticker, "price": None, "rsi": None}
+        parsed["name"] = w.get("name", parsed.get("name", sym))
+        parsed["yf_symbol"] = sym
         out.append(parsed)
     return out
 
@@ -769,9 +881,68 @@ def get_indices():
         logger.warning(f"Indices TV fetch: {e}")
     return out
 
+# ─── CALENDARIO (Sezione 2) ───────────────────────────────────────────────────
+def build_calendario(portfolio, regole_map, eventi_macro, giorni=60):
+    """Unisce le riunioni BCE/Fed e gli eventi per-titolo scritti a mano nelle
+    regole delle posizioni aperte, filtrati sui prossimi N giorni e ordinati
+    cronologicamente. Non include eventi per titoli fuori portafoglio: la
+    watchlist configurabile arriva in Fase 5."""
+    oggi = date.today()
+    limite = oggi + timedelta(days=giorni)
+    voci = [e for e in eventi_macro if oggi <= e["data"] <= limite]
+    for p in portfolio:
+        isin = p.get("isin")
+        nome = p.get("name", isin)
+        regola = regole_map.get(isin) or {}
+        for ev in regola.get("eventi", []):
+            if oggi <= ev["data"] <= limite:
+                voci.append({"data": ev["data"], "titolo": nome, "tipo": ev.get("tipo", "evento")})
+    voci.sort(key=lambda v: v["data"])
+    return voci
+
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
 
-def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
+def _confronto_ieri(p):
+    """Descrive cosa dicono i dati di IERI per questa posizione, calcolato in
+    Python (non lasciato indovinare al modello): il prompt deve narrare un
+    fatto già accertato, non stimare una variazione a occhio."""
+    isin = p.get("isin")
+    prev = storico.valore_precedente(isin=isin, categoria="posizione") if isin else None
+    if not prev:
+        return "nessun dato di ieri (prima rilevazione per questa posizione)"
+    parti = []
+    if prev.get("close") and p.get("price"):
+        var = (p["price"] / prev["close"] - 1) * 100
+        parti.append(f"prezzo da {prev['close']:.2f} a {p['price']:.2f} ({var:+.1f}%)")
+    if prev.get("rsi") is not None and p.get("rsi") is not None:
+        parti.append(f"RSI da {prev['rsi']:.0f} a {p['rsi']:.0f}")
+    if prev.get("macd_hist") is not None:
+        segno_prev = "positivo" if prev["macd_hist"] > 0 else "negativo"
+        segno_oggi = "positivo" if (p.get("macd_hist") or 0) > 0 else "negativo"
+        if segno_prev != segno_oggi:
+            parti.append(f"MACD passato da {segno_prev} a {segno_oggi}")
+    return "; ".join(parti) if parti else "nessuna variazione significativa rispetto a ieri"
+
+def _regole_txt(p, regole_map):
+    """Le regole scritte dall'utente per questa posizione, in una riga —
+    cosi' il modello ha i fatti per trovare contraddizioni, senza doverli
+    dedurre da una tabella separata."""
+    regola = regole_map.get(p.get("isin")) or {}
+    if not any(regola.get(k) for k in ("stop", "target", "revisione", "tesi")):
+        return "nessuna regola scritta"
+    parti = []
+    if regola.get("stop"):
+        parti.append(f"stop {regola['stop']}")
+    if regola.get("target"):
+        parti.append(f"target {regola['target']}")
+    if regola.get("revisione"):
+        parti.append(f"revisione {regola['revisione'].strftime('%d/%m/%Y')}")
+    if regola.get("tesi"):
+        parti.append(f"tesi scritta: \"{regola['tesi']}\"")
+    return ", ".join(parti)
+
+def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices, regole_map=None):
+    regole_map = regole_map or {}
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     def fmt(lst):
@@ -779,14 +950,17 @@ def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
             return "Nessun titolo ha superato il filtro oggi."
         return "\n".join(
             f"- {d['symbol']} ({d.get('name','')}): prezzo {d['price']}, RSI {d['rsi']}, "
-            f"1M {d.get('perf_1m','n.d.')}%, MACD {d.get('macd_str','n.d.')}, TV Rec: {d.get('rec_str','n.d.')}"
+            f"1M {d.get('perf_1m','n.d.')}%, 3M {d.get('perf_3m','n.d.')}%, "
+            f"MACD {d.get('macd_str','n.d.')}, TV Rec: {d.get('rec_str','n.d.')}"
             for d in lst
         )
 
     port_txt = "\n".join(
         f"- {p['name']} ({p.get('yf_symbol', p['symbol'])}): prezzo {p.get('price','n.d.')}, "
-        f"RSI {p.get('rsi','n.d.')}, trend {p.get('trend','n.d.')}, "
-        f"MACD {p.get('macd_str','n.d.')}, 1M {p.get('perf_1m','n.d.')}%, TV Rec: {p.get('rec_str','n.d.')}"
+        f"RSI {p.get('rsi','n.d.')}, trend {p.get('trend','n.d.')}, MACD {p.get('macd_str','n.d.')}, "
+        f"detenuta da {p.get('giorni_detenzione','n.d.')} giorni.\n"
+        f"  Rispetto a ieri: {_confronto_ieri(p)}.\n"
+        f"  Regole scritte dall'utente: {_regole_txt(p, regole_map)}."
         for p in portfolio
     ) or "Portafoglio vuoto."
 
@@ -795,37 +969,48 @@ def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
         for k, v in indices.items()
     )
 
-    prompt = f"""Sei un analista finanziario esperto. Data: {datetime.now().strftime('%d/%m/%Y')}.
+    prompt = f"""Descrivi fatti, non consigliare operazioni. Data: {datetime.now().strftime('%d/%m/%Y')}.
 
-I dati tecnici provengono da TradingView. MACD indica la direzione del momentum (↑ = rialzista, ↓ = ribassista).
-TV Rec è la raccomandazione aggregata di 26 indicatori TradingView (Compra Forte / Compra / Neutro / Vendi / Vendi Forte).
+REGOLA FONDAMENTALE: non suggerire mai di comprare, vendere, accumulare, ridurre
+posizioni o riallocare capitale. Non usare parole come "consiglio", "opportunità",
+"conviene", "meglio". Il tuo unico compito è descrivere COSA È CAMBIATO rispetto a
+ieri e segnalare eventuali CONTRADDIZIONI tra la tesi scritta dall'utente e i fatti
+attuali. La decisione resta sempre dell'utente: tu esponi i fatti, non giudichi.
+
+I dati tecnici provengono da TradingView e da uno storico giornaliero proprio.
+MACD indica la direzione del momentum. TV Rec è la raccomandazione aggregata di
+26 indicatori TradingView: la riporti come dato di fatto, non la usi per consigliare.
 
 INDICI:
 {idx_txt}
 
-TOP AZIONI ITALIANE (screener TV — filtro RSI+EMA+MACD):
+TITOLI IN "DA APPROFONDIRE" (screener — spunti di ricerca, non idee d'acquisto):
+Italia:
 {fmt(stocks_it)}
-
-TOP AZIONI USA (screener TV — filtro RSI+EMA+MACD+cap>100M):
+USA:
 {fmt(stocks_us)}
-
-TOP ETF (screener TV — filtro RSI+EMA+MACD):
+ETF:
 {fmt(etfs)}
 
-PORTAFOGLIO STEFANO:
+LE MIE POSIZIONI (conto B), con il confronto con ieri e le regole scritte dall'utente:
 {port_txt}
 
 Genera un JSON con questa struttura ESATTA (solo JSON puro, zero markdown):
 {{
-  "contesto_mercato": "2-3 frasi professionali su sentiment e indici",
-  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe che citano MACD e TV Rec","rating":"Forte"}}],
-  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe che citano MACD e TV Rec","rating":"Moderato"}}],
-  "etfs_analysis": [{{"symbol":"TICKER","tema":"AI / Semiconduttori / ecc.","motivazione":"2-3 righe","rating":"Forte"}}],
-  "portfolio_analysis": [{{"symbol":"TICKER","segnale":"Accumula","motivazione":"2-3 righe con riferimento a MACD e trend"}}],
-  "sintesi_portafoglio": "2-3 frasi di sintesi operativa"
+  "contesto_mercato": "2-3 frasi che descrivono cosa e' cambiato oggi sui mercati rispetto a ieri, nessun consiglio",
+  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento — mai un consiglio operativo, mai dire se comprare o vendere"}}],
+  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento — mai un consiglio operativo, mai dire se comprare o vendere"}}],
+  "etfs_analysis": [{{"symbol":"TICKER","tema":"AI / Semiconduttori / ecc.","motivazione":"2-3 righe descrittive — mai un consiglio operativo"}}],
+  "cambiamenti_posizioni": [{{"symbol":"TICKER","descrizione":"cosa e' cambiato rispetto a ieri per questa posizione, solo fatti (prezzo, RSI, trend, MACD) — se non c'e' un cambiamento degno di nota NON includere questa posizione nell'elenco"}}],
+  "contraddizioni_posizioni": [{{"symbol":"TICKER","contraddizione":"SOLO se la tesi scritta dall'utente e' in conflitto di significato con i fatti attuali (es. la tesi presuppone una condizione che i fatti di oggi negano) — non ripetere il confronto numerico stop/target/giorni di detenzione, il report li mostra già altrove — se non c'e' una tesi scritta o nessun conflitto reale, NON includere questa posizione nell'elenco"}}]
 }}
-Rating: Forte o Moderato. Segnale: Accumula, Mantieni o Riduci.
-Usa il campo symbol uguale al ticker TV per portfolio_analysis (es. "OMER", "PANW", "MIL:SMH").
+Per stocks_it_analysis, stocks_us_analysis ed etfs_analysis questi titoli sono spunti
+di ricerca, non idee d'acquisto: la motivazione deve spiegare PERCHÉ il titolo si
+muove (il fatto), mai cosa farne.
+cambiamenti_posizioni e contraddizioni_posizioni sono array che possono restare
+vuoti: non forzare un'osservazione dove non ce n'è una vera.
+Usa il campo symbol uguale al ticker TV, senza prefisso exchange quando possibile
+(es. "OMER", "PANW", "MIL:SMH" se serve disambiguare).
 Per qualsiasi ETF a leva menziona sempre il rischio decay da leva giornaliera."""
 
     msg = client.messages.create(
@@ -847,43 +1032,6 @@ def pct(val):
 def rating_badge(r):
     color = "#16a34a" if r == "Forte" else "#d97706"
     return f'<span style="color:{color};font-weight:700">● {r}</span>'
-
-def compute_score(r, market_delta=0):
-    """Score 0-10 composito: segnale + pattern + volume + contesto mercato."""
-    sig_label = compute_signal(r)[0]
-    pat_label = detect_pattern(r)
-
-    sig_pts = {
-        "🚀 Breakout": 3.0, "💪 Trend Forte": 2.5, "📈 Rialzista": 2.0,
-        "🔄 Rimbalzo": 1.5, "📣 Volume Spike": 1.5, "➡️ Laterale": 0.0,
-        "📊 Neutro": 0.0, "📉 Momentum ↓": -1.0, "⚠️ Ipercomprato": -0.5,
-    }.get(sig_label, 0)
-
-    pat_pts = {
-        "🔝 Breakout 52W": 2.0, "🚩 Flag Rialzista": 1.5,
-        "↩️ Pullback EMA20": 1.0, "🔁 Doppio Minimo?": 1.0,
-        "🛡️ Test Supporto": 0.5, "🔴 Resistenza": -1.0,
-        "⛰️ Doppio Picco?": -1.5,
-    }.get(pat_label, 0)
-
-    vol    = r.get("volume")  or 0
-    vol10d = r.get("vol_10d") or 1
-    vol_pts = 0.5 if (vol > vol10d * 2.5 and sig_pts > 0) else 0
-
-    mkt_pts = 0.5 if market_delta > 0 else (-0.5 if market_delta < 0 else 0)
-
-    score = sig_pts + pat_pts + vol_pts + mkt_pts
-    return max(0, min(10, score + 3))  # shift +3 per portare in range 0-10
-
-def raccomandazione_badge(score):
-    if score >= 5.5:
-        return '<span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span>'
-    elif score >= 3.5:
-        return '<span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span>'
-    elif score >= 1.5:
-        return '<span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span>'
-    else:
-        return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Evitare</span>'
 
 def etp_reco_badge(score):
     """Badge per la Rec. degli ETP, coerente con l'ordinamento (etp_total_score).
@@ -1044,11 +1192,6 @@ def detect_pattern(r):
         return "🔴 Resistenza"
     return "—"
 
-def signal_badge(s):
-    colors = {"Accumula": "#16a34a", "Riduci": "#dc2626", "Mantieni": "#d97706"}
-    c = colors.get(s, "#d97706")
-    return f'<span style="color:{c};font-weight:700">● {s}</span>'
-
 def idx_badge(val):
     if val is None:
         return '<span style="color:#999">n.d.</span>'
@@ -1082,6 +1225,15 @@ def rec_badge(rec_str):
     c = colors.get(rec_str, "#888")
     return f'<span style="color:{c};font-size:12px;font-weight:700">● {rec_str}</span>'
 
+def trend_rimbalzo_badge(label):
+    """Badge di classificazione (non un giudizio d'acquisto): distingue un trend
+    confermato su 1M e 3M da un semplice rimbalzo tecnico dopo un calo a 3M."""
+    if label == "TREND":
+        return '<span style="color:#1d4ed8;font-weight:700;white-space:nowrap">📈 TREND</span>'
+    if label == "RIMBALZO":
+        return '<span style="color:#9333ea;font-weight:700;white-space:nowrap">🔄 RIMBALZO</span>'
+    return '<span style="color:#999">n.d.</span>'
+
 def stock_rows(lst, analysis_map, market_delta=0):
     if not lst:
         return '<tr><td colspan="15" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (RSI 48-75, prezzo &gt; EMA20/50, MACD &gt; 0)</td></tr>'
@@ -1103,7 +1255,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
+            <td>{trend_rimbalzo_badge(classify_trend_rimbalzo(d))}</td>
             <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
         </tr>"""
     return rows
@@ -1137,42 +1289,207 @@ def etf_rows(lst, analysis_map, market_delta=0):
         </tr>"""
     return rows
 
-def portfolio_rows(portfolio, analysis_map, market_delta=0):
+def var_da_carico_html(price, prezzo_medio):
+    if not price or not prezzo_medio:
+        return '<span style="color:#999">n.d.</span>'
+    var = (price / prezzo_medio - 1) * 100
+    color = "#16a34a" if var >= 0 else "#dc2626"
+    return f'<span style="color:{color};font-weight:700">{var:+.1f}%</span>'
+
+def giorni_detenzione_html(giorni):
+    if giorni is None:
+        return '<span style="color:#999">n.d.</span>'
+    if giorni < 60:
+        color = "#16a34a"
+    elif giorni <= 80:
+        color = "#d97706"
+    else:
+        color = "#dc2626"
+    return f'<span style="color:{color};font-weight:700">{giorni} gg</span>'
+
+def distanza_da_livello_html(price, livello, verso_alto):
+    """verso_alto=True per il target (quanto manca, in %, perche' il prezzo
+    deve ancora salire per raggiungerlo). verso_alto=False per lo stop
+    (quanto e' sopra, in %: negativo significa che l'ha gia' rotto)."""
+    if not price or not livello:
+        return '<span style="color:#999">n.d.</span>'
+    dist = (livello / price - 1) * 100 if verso_alto else (price / livello - 1) * 100
+    color = "#dc2626" if dist < 0 else "#444"
+    return f'<span style="color:{color};font-weight:600">{dist:+.1f}%</span>'
+
+def trend_ema_html(sopra, giorni, certo, label):
+    freccia, stato = ("▲", "Sopra") if sopra else ("▼", "Sotto")
+    color = "#16a34a" if sopra else "#dc2626"
+    if giorni is None:
+        durata = ""
+    else:
+        durata = f" ({giorni}gg)" if certo else f" (almeno {giorni}gg)"
+    return f'<span style="color:{color};font-weight:600;white-space:nowrap">{freccia} {stato} {label}{durata}</span>'
+
+def eventi_prossimi_html(eventi, giorni_max=30):
+    oggi = date.today()
+    prossimi = sorted(
+        (e for e in (eventi or []) if 0 <= (e["data"] - oggi).days <= giorni_max),
+        key=lambda e: e["data"]
+    )
+    if not prossimi:
+        return '<span style="color:#999;font-size:12px">nessuno nei prossimi 30gg</span>'
+    return "<br>".join(
+        f'<span style="font-size:12px">{e["tipo"]} — {e["data"].strftime("%d/%m")}</span>'
+        for e in prossimi
+    )
+
+def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
+    """Domande/osservazioni fattuali, non giudizi: confronta lo stato attuale
+    con i tuoi dati (storico personale) e con quello che hai scritto tu
+    (stop/target/revisione). Nessun badge Mantieni/Riduci/Evitare.
+    cambiamento e contraddizione sono testo generato dal modello (Fase 6):
+    solo descrizione di cosa e' cambiato da ieri e di eventuali conflitti tra
+    la tesi scritta e i fatti — mai un consiglio — e vengono mostrati in un
+    colore diverso per restare distinguibili dai fatti calcolati qui sotto."""
+    note = []
+    price = p.get("price")
+    giorni = p.get("giorni_detenzione")
+    stop = (regola or {}).get("stop")
+    target = (regola or {}).get("target")
+    revisione = (regola or {}).get("revisione")
+
+    if giorni is not None and giorni > 80:
+        note.append(f"Aperta da {giorni} giorni — sopra la permanenza media dei tuoi trade perdenti (80gg).")
+    elif giorni is not None and giorni >= 60:
+        note.append(f"Aperta da {giorni} giorni — nella fascia (61-180gg) dove il tuo win rate storico scende al 32%.")
+
+    if price and stop and price <= stop:
+        note.append(f"Sotto lo stop dichiarato ({stop}).")
+    if price and target and price >= target:
+        note.append(f"Sopra il target dichiarato ({target}).")
+    if revisione and date.today() > revisione:
+        note.append(f"Data di revisione ({revisione.strftime('%d/%m/%Y')}) superata.")
+
+    righe = [f'<span style="font-size:12px;color:#92400e">▸ {n}</span>' for n in note]
+    if cambiamento:
+        righe.append(f'<span style="font-size:12px;color:#1d4ed8">↻ {cambiamento}</span>')
+    if contraddizione:
+        righe.append(f'<span style="font-size:12px;color:#7c3aed">⚠ Tesi vs fatti: {contraddizione}</span>')
+
+    if not righe:
+        return '<span style="color:#999;font-size:12px">—</span>'
+    return "<br>".join(righe)
+
+def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None):
+    cambiamenti_map = cambiamenti_map or {}
+    contraddizioni_map = contraddizioni_map or {}
+    if not portfolio:
+        return ('<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">'
+                'Nessuna posizione aperta sul conto B (dossier non ancora caricato, vedi README).</td></tr>')
     rows = ""
     for p in portfolio:
-        # yf_symbol ora è in formato TV (es. "MIL:OMER" o "PANW")
-        # Claude risponde con il ticker senza prefisso exchange (es. "OMER")
-        # → prova prima la chiave piena, poi il ticker nudo
+        isin = p.get("isin")
+        regola = regole_map.get(isin) or {}
         sym_key = p.get("yf_symbol", p.get("symbol", ""))
         bare_key = sym_key.split(":")[-1] if ":" in sym_key else sym_key
-        a = analysis_map.get(sym_key) or analysis_map.get(bare_key, {})
-        trend = p.get("trend", "n.d.")
-        trend_color = {
-            "Rialzista": "#16a34a", "Rialzista (>EMA200)": "#15803d",
-            "Ribassista": "#dc2626", "Laterale": "#d97706", "Sopra EMA20": "#2563eb",
-        }.get(trend, "#999")
-        price_str = f"{p['price']:.2f}" if p.get("price") else "n.d."
-        yf_sym = p.get("yf_symbol", sym_key)
+        cambiamento = (cambiamenti_map.get(sym_key) or cambiamenti_map.get(bare_key) or {}).get("descrizione")
+        contraddizione = (contraddizioni_map.get(sym_key) or contraddizioni_map.get(bare_key) or {}).get("contraddizione")
+        price = p.get("price")
+        ema50, ema200 = p.get("ema50") or 0, p.get("ema200") or 0
+
+        # 1) Storico reale (Yahoo): EMA vere, data di incrocio vera.
+        bars = p.get("bars_storico") or []
+        sopra50, g50, certo50 = indicatori_storici.trend_vs_ema(bars, 50)
+        sopra200, g200, certo200 = indicatori_storici.trend_vs_ema(bars, 200)
+
+        # 2) Storico Yahoo non disponibile per questo titolo: ripiego sul
+        # nostro log giornaliero (storico.py) — "almeno N giorni" finche' non
+        # ha visto un cambio di stato — e in assenza anche di quello, sullo
+        # stato del solo giorno corrente (nessuna durata).
+        if sopra50 is None:
+            sopra50 = bool(price and ema50 and price > ema50)
+            g50, certo50 = storico.giorni_in_stato(
+                isin, lambda r: bool(r["close"] and r["ema50"] and r["close"] > r["ema50"]), sopra50
+            ) if isin else (None, False)
+        if sopra200 is None:
+            sopra200 = bool(price and ema200 and price > ema200)
+            g200, certo200 = storico.giorni_in_stato(
+                isin, lambda r: bool(r["close"] and r["ema200"] and r["close"] > r["ema200"]), sopra200
+            ) if isin else (None, False)
+        price_str = f"{price:.2f}" if price else "n.d."
+        divisa = p.get("divisa") or ""
+        tesi = regola.get("tesi") or ""
+        tesi_html = tesi if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
+
         rows += f"""<tr>
-            <td><strong>{p['name']}</strong><br><span style="color:#999;font-size:11px">{yf_sym}</span></td>
-            <td style="font-size:12px;color:#666">{p.get('type','')}</td>
-            <td>{price_str}</td>
-            <td>{p['rsi'] if p.get('rsi') else 'n.d.'}</td>
-            <td style="color:{trend_color};font-weight:600;font-size:12px">{trend}</td>
-            <td>{pct(p.get('perf_1m'))}</td>
-            <td>{pct(p.get('perf_3m'))}</td>
-            <td>{pct(p.get('perf_5d'))}</td>
-            <td>{candles_5d_svg(p.get('bars_5d'))}</td>
-            <td>{candle_badge(p.get('candle_d','—'))}</td>
-            <td>{candle_badge(p.get('candle_w','—'))}</td>
-            <td>{macd_badge(p.get('macd_str','n.d.'))}</td>
-            <td>{_composite_badge(*compute_signal(p))}</td>
-            <td style="font-size:12px">{detect_pattern(p)}</td>
-            <td>{raccomandazione_badge(compute_score(p, market_delta))}</td>
-            <td>{signal_badge(a.get('segnale','Mantieni'))}</td>
-            <td class="wrap"><div style="color:#444">{a.get('motivazione','')}</div></td>
+            <td><strong>{p.get('name', p.get('symbol',''))}</strong><br><span style="color:#999;font-size:11px">{p.get('yf_symbol', p.get('symbol',''))}</span></td>
+            <td>{price_str} {divisa}</td>
+            <td>{var_da_carico_html(price, p.get('prezzo_medio'))}</td>
+            <td>{giorni_detenzione_html(p.get('giorni_detenzione'))}</td>
+            <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}</td>
+            <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}</td>
+            <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
+            <td>{eventi_prossimi_html(regola.get('eventi'))}</td>
+            <td>{note_fattuali_html(p, regola, cambiamento, contraddizione)}</td>
+            <td class="wrap"><div style="color:#444;font-size:12px">{tesi_html}</div></td>
         </tr>"""
     return rows
+
+def calendario_rows(voci):
+    if not voci:
+        return '<tr><td colspan="3" style="text-align:center;color:#999;padding:20px">Nessun evento nei prossimi 60 giorni.</td></tr>'
+    rows = ""
+    for v in voci:
+        rows += f"""<tr>
+            <td style="white-space:nowrap">{v['data'].strftime('%d/%m/%Y')}</td>
+            <td>{v['tipo']}</td>
+            <td>{v['titolo']}</td>
+        </tr>"""
+    return rows
+
+# ─── SEGNALI DI MEDIO PERIODO (Sezione 4) ────────────────────────────────────
+_SEGNALI_BULLISH = {"Doppio minimo", "Divergenza rialzista (RSI settimanale)",
+                    "Rottura massimo 52 settimane", "Golden cross"}
+_SEGNALI_BEARISH = {"Doppio massimo", "Divergenza ribassista (RSI settimanale)",
+                    "Rottura minimo 52 settimane", "Death cross"}
+
+def _segnale_badge(tipo):
+    if tipo in _SEGNALI_BULLISH:
+        color = "#16a34a"
+    elif tipo in _SEGNALI_BEARISH:
+        color = "#dc2626"
+    else:
+        color = "#6b7280"
+    return f'<span style="color:{color};font-weight:700;white-space:nowrap">{tipo}</span>'
+
+def _formatta_dettaglio_segnale(s):
+    tipo = s.get("tipo", "")
+    if tipo in ("Doppio massimo", "Doppio minimo"):
+        return (f"Picchi del {s['data_picco1'].strftime('%d/%m/%Y')} e {s['data_picco2'].strftime('%d/%m/%Y')}, "
+                f"distanza {s['distanza_pct']}%. Livello di conferma: {s['livello_conferma']}.")
+    if "Divergenza" in tipo:
+        return (f"{s['prezzo'].capitalize()} tra il {s['data_primo'].strftime('%d/%m/%Y')} "
+                f"e il {s['data_secondo'].strftime('%d/%m/%Y')}: RSI da {s['rsi_primo']} a {s['rsi_secondo']}.")
+    if "Rottura" in tipo:
+        return f"Il {s['data'].strftime('%d/%m/%Y')}, livello precedente {s['livello_precedente']}."
+    if tipo in ("Golden cross", "Death cross"):
+        durata = f"{s['giorni_da_incrocio']}gg" if s["certo"] else f"almeno {s['giorni_da_incrocio']}gg"
+        return f"EMA50/200 su candele settimanali, da {durata}."
+    if tipo == "Volume anomalo":
+        return f"Il {s['data'].strftime('%d/%m/%Y')}, {s['rapporto']}x la media a 50 giorni."
+    return ""
+
+def segnali_medio_periodo_rows(items):
+    """items: lista di (nome, symbol, categoria, lista_segnali)."""
+    righe = ""
+    for nome, symbol, categoria, segnali in items:
+        for s in segnali:
+            righe += f"""<tr>
+                <td><strong>{nome}</strong><br><span style="color:#999;font-size:11px">{symbol}</span></td>
+                <td style="font-size:12px;color:#666">{categoria}</td>
+                <td>{_segnale_badge(s['tipo'])}</td>
+                <td class="wrap"><div style="color:#444;font-size:12px">{_formatta_dettaglio_segnale(s)}</div></td>
+            </tr>"""
+    if not righe:
+        return ('<tr><td colspan="4" style="text-align:center;color:#999;padding:20px">'
+                'Nessun segnale di medio periodo rilevato oggi.</td></tr>')
+    return righe
 
 def _analysis_map(items):
     """Costruisce dict symbol→analisi con lookup fuzzy:
@@ -1189,14 +1506,19 @@ def _analysis_map(items):
             m.setdefault(bare.split(":")[-1], a)
     return m
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]"):
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]",
+               regole_map=None, calendario=None, segnali_items=None):
+    regole_map = regole_map or {}
+    calendario = calendario or []
+    segnali_items = segnali_items or []
     today = datetime.now().strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
     sm_it  = _analysis_map(analysis.get("stocks_it_analysis", []))
     sm_us  = _analysis_map(analysis.get("stocks_us_analysis", []))
     em     = _analysis_map(analysis.get("etfs_analysis", []))
-    pm     = _analysis_map(analysis.get("portfolio_analysis", []))
+    cm     = _analysis_map(analysis.get("cambiamenti_posizioni", []))
+    cx     = _analysis_map(analysis.get("contraddizioni_posizioni", []))
 
     # Contesto di mercato per Raccomandazione
     mkt_it = indices.get("FTSE MIB") or 0
@@ -1800,6 +2122,29 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 
 <div class="container">
 
+  <!-- LE MIE POSIZIONI -->
+  <div class="section">
+    <h2>Le mie posizioni <span class="badge-count">{len(portfolio)} aperte</span></h2>
+    <table>
+      <thead><tr>
+        <th>Titolo</th><th>Prezzo</th><th>Var. da carico</th><th>Giorni detenzione</th>
+        <th>Distanza da stop</th><th>Distanza da target</th><th>Trend medio periodo</th>
+        <th>Eventi (30gg)</th><th>Da notare</th><th>Tesi scritta</th>
+      </tr></thead>
+      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx)}</tbody>
+    </table>
+    <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto in data/regole_posizioni.yaml. La decisione resta tua.</p>
+  </div>
+
+  <!-- CALENDARIO -->
+  <div class="section">
+    <h2>Calendario <span class="badge-count">prossimi 60 giorni</span></h2>
+    <table>
+      <thead><tr><th>Data</th><th>Tipo</th><th>Titolo</th></tr></thead>
+      <tbody>{calendario_rows(calendario)}</tbody>
+    </table>
+  </div>
+
   <!-- CONTESTO DI MERCATO -->
   <div class="section">
     <h2>Contesto di Mercato</h2>
@@ -1807,28 +2152,38 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <div class="contesto">{analysis.get('contesto_mercato','')}</div>
   </div>
 
-  <!-- TOP 10 AZIONI ITALIANE -->
+  <!-- DA APPROFONDIRE — GIA IN MOVIMENTO (ITALIA) -->
   <div class="section">
-    <h2>Top Azioni Italiane — Momentum <span class="badge-count">{len(stocks_it)} oggi</span></h2>
+    <h2>Da approfondire — già in movimento (Italia) <span class="badge-count">{len(stocks_it)} oggi</span></h2>
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Tipo</th><th>Perché sta salendo</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_it, sm_it, mkt_it)}</tbody>
     </table>
   </div>
 
-  <!-- TOP 10 AZIONI USA -->
+  <!-- DA APPROFONDIRE — GIA IN MOVIMENTO (USA) -->
   <div class="section">
-    <h2>Top Azioni USA — Momentum <span class="badge-count">{len(stocks_us)} oggi</span></h2>
+    <h2>Da approfondire — già in movimento (USA) <span class="badge-count">{len(stocks_us)} oggi</span></h2>
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Tipo</th><th>Perché sta salendo</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_us, sm_us, mkt_us)}</tbody>
     </table>
+  </div>
+
+  <!-- SEGNALI DI MEDIO PERIODO -->
+  <div class="section">
+    <h2>Segnali di medio periodo <span class="badge-count">candele settimanali, 3-12 mesi</span></h2>
+    <table>
+      <thead><tr><th>Titolo</th><th>Fonte</th><th>Segnale</th><th>Dettaglio</th></tr></thead>
+      <tbody>{segnali_medio_periodo_rows(segnali_items)}</tbody>
+    </table>
+    <p class="empty-note">Solo sulle tue posizioni e sulla watchlist in data/watchlist.yaml — non su tutto il mercato. Un pattern non pulito non viene forzato: niente segnale è meglio di un falso segnale.</p>
   </div>
 
   <!-- TOP 10 ETF / ETN / ETC ITALIA -->
@@ -1841,18 +2196,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       </tr></thead>
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
-  </div>
-
-  <!-- PORTAFOGLIO -->
-  <div class="section">
-    <h2>💼 Portafoglio — Analisi Tecnica</h2>
-    <table>
-      <thead><tr>
-        <th>Titolo</th><th>Tipo</th><th>Prezzo</th><th>RSI</th><th>Trend</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Operativo</th><th>Analisi</th>
-      </tr></thead>
-      <tbody>{portfolio_rows(portfolio, pm, (mkt_it + mkt_us) / 2)}</tbody>
-    </table>
-    <div class="sintesi"><strong>Sintesi operativa:</strong> {analysis.get('sintesi_portafoglio','')}</div>
   </div>
 
   <!-- AGGIORNA PORTAFOGLIO -->
@@ -1976,8 +2319,32 @@ def main():
     enrich_5d(etfs,      "ETP")
     enrich_5d(portfolio, "portafoglio")
 
+    logger.info("Recupero storico 5 anni per le posizioni (EMA reali, non stimate)...")
+    enrich_storico_esteso(portfolio, "portafoglio")
+
+    logger.info("Caricamento regole posizioni, calendario macro e watchlist...")
+    regole_map = regole.load_regole()
+    eventi_macro = regole.load_eventi_macro()
+    calendario = build_calendario(portfolio, regole_map, eventi_macro)
+    watchlist_data = get_watchlist_data(regole.load_watchlist())
+    enrich_storico_esteso(watchlist_data, "watchlist")
+
+    logger.info("Calcolo segnali di medio periodo (Sezione 4)...")
+    segnali_items = [
+        (p.get("name", p.get("symbol", "")), p.get("yf_symbol", p.get("symbol", "")), "Posizione",
+         segnali_medio_periodo.calcola_segnali(p.get("bars_storico") or []))
+        for p in portfolio
+    ] + [
+        (w.get("name", w.get("symbol", "")), w.get("yf_symbol", w.get("symbol", "")), "Watchlist",
+         segnali_medio_periodo.calcola_segnali(w.get("bars_storico") or []))
+        for w in watchlist_data
+    ]
+
+    logger.info("Aggiornamento storico persistente...")
+    storico.record_daily(portfolio, stocks_it + stocks_us)
+
     logger.info("Generating analysis with Claude...")
-    analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
+    analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices, regole_map)
 
     logger.info("Building HTML...")
     pwd = os.environ.get("SITE_PASSWORD", "")
@@ -1986,7 +2353,8 @@ def main():
         {"symbol": p["symbol"], "name": p.get("name", p["symbol"]), "type": p.get("type", "Azione")}
         for p in PORTFOLIO
     ], ensure_ascii=False)
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base)
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base,
+                       regole_map, calendario, segnali_items)
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:

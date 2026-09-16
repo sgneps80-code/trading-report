@@ -1,0 +1,22 @@
+# Date ufficiali delle riunioni di politica monetaria (rate decision).
+# Fonti: ecb.europa.eu/press/calendars/mgcgc, federalreserve.gov/monetarypolicy.
+# Aggiorna a inizio anno quando le banche centrali pubblicano il calendario
+# dell'anno successivo (di solito entro dicembre).
+bce:
+  - 2026-02-05
+  - 2026-03-19
+  - 2026-04-30
+  - 2026-06-11
+  - 2026-07-23
+  - 2026-09-10
+  - 2026-10-29
+  - 2026-12-17
+fed:
+  - 2026-01-28
+  - 2026-03-18
+  - 2026-04-29
+  - 2026-06-17
+  - 2026-07-29
+  - 2026-09-16
+  - 2026-10-28
+  - 2026-12-09

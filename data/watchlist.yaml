@@ -1,0 +1,14 @@
+# Titoli da monitorare per i segnali di medio periodo (Sezione 4), oltre
+# alle posizioni aperte del conto B. Un simbolo TradingView per voce.
+# Niente scansione di tutto il mercato: solo quello che scrivi qui.
+#
+# Formato:
+# simboli:
+#   - symbol: "EXCHANGE:TICKER"    # es. "MIL:ENI", oppure solo "TICKER" per i titoli USA
+#     name: "Nome leggibile"
+#
+# Esempio (cancella, non e' un simbolo da tenere):
+# simboli:
+#   - symbol: "MIL:ENI"
+#     name: "Eni"
+simboli: []

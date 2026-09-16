@@ -1,0 +1,24 @@
+# Regole di posizione (Fase 3): una voce per ISIN (lo stesso ISIN usato in
+# data/isin_map.json). Il report confronta lo stato attuale con questi
+# valori — non genera giudizi propri.
+#
+# Formato:
+#   <ISIN>:
+#     stop: <prezzo>                    # numero, valuta della posizione
+#     target: <prezzo>
+#     revisione: <YYYY-MM-DD>           # data in cui hai deciso di rivedere la tesi
+#     tesi: "<una riga>"
+#     eventi:                           # opzionale: date certe per questo titolo
+#       - tipo: trimestrale             # trimestrale | assemblea | cedola | scadenza_certificato
+#         data: <YYYY-MM-DD>
+#
+# Esempio (ISIN non reale, cancella prima di aggiungere le tue posizioni):
+# IT0000000000:
+#   stop: 12.50
+#   target: 16.00
+#   revisione: 2026-10-15
+#   tesi: "Turnaround margini, breakout su EMA200"
+#   eventi:
+#     - tipo: trimestrale
+#       data: 2026-11-05
+{}
