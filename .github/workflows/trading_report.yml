@@ -43,6 +43,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Maschera i dati personali degli input prima di ogni altro log
+        # Nessun blocco env qui apposta: GitHub stampa in chiaro nel log il
+        # blocco env di OGNI step (anche il primo), ma solo per valori già
+        # registrati come secrets.*. Un input di workflow_dispatch non è mai
+        # mascherato automaticamente: va registrato qui, inline nell'unico
+        # step senza env, prima che qualsiasi step successivo con un blocco
+        # env lo stampi in chiaro.
+        run: |
+          echo "::add-mask::${{ inputs.portfolio_json }}"
+          echo "::add-mask::${{ inputs.movimenti_xlsx_b64 }}"
+          echo "::add-mask::${{ inputs.isin_map_json }}"
+          echo "::add-mask::${{ inputs.regole_posizioni_yaml }}"
+
       - name: Generate HTML report
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
