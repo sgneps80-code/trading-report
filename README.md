@@ -29,6 +29,23 @@ per titolo) e `data/eventi_macro.yaml` (riunioni BCE/Fed) — schema e istruzion
 nei commenti dei due file. Il report confronta lo stato attuale con questi
 valori, non genera giudizi propri.
 
+## Il prompt AI descrive, non consiglia
+
+Il modello non genera più raccomandazioni operative (accumula/mantieni/riduci,
+punteggi Forte/Moderato): quei campi sono stati rimossi dallo schema. Per le
+posizioni aperte produce solo due cose, entrambe visibili nella colonna "Da
+notare" di Sezione 1, in un colore diverso dai fatti calcolati in Python:
+- **cosa è cambiato rispetto a ieri** (prezzo, RSI, MACD), confrontando con
+  `data/storico_indicatori.csv` — i numeri del confronto li calcola Python,
+  al modello resta solo il compito di descriverli in una riga;
+- **contraddizioni tra la tesi scritta e i fatti attuali**, solo quando c'è
+  un conflitto di significato reale (non ripete il confronto numerico
+  stop/target, già mostrato in tabella).
+
+Per "Da approfondire" ed ETF il modello resta limitato a descrivere il
+possibile catalizzatore del movimento — mai un consiglio operativo, come già
+dalla correzione del filtro di liquidità.
+
 ## Storico: due fonti diverse, per due scopi diversi
 
 **EMA, incroci, indicatori di medio periodo** (Sezione 1 e i segnali della

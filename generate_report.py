@@ -902,7 +902,47 @@ def build_calendario(portfolio, regole_map, eventi_macro, giorni=60):
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
 
-def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
+def _confronto_ieri(p):
+    """Descrive cosa dicono i dati di IERI per questa posizione, calcolato in
+    Python (non lasciato indovinare al modello): il prompt deve narrare un
+    fatto già accertato, non stimare una variazione a occhio."""
+    isin = p.get("isin")
+    prev = storico.valore_precedente(isin=isin, categoria="posizione") if isin else None
+    if not prev:
+        return "nessun dato di ieri (prima rilevazione per questa posizione)"
+    parti = []
+    if prev.get("close") and p.get("price"):
+        var = (p["price"] / prev["close"] - 1) * 100
+        parti.append(f"prezzo da {prev['close']:.2f} a {p['price']:.2f} ({var:+.1f}%)")
+    if prev.get("rsi") is not None and p.get("rsi") is not None:
+        parti.append(f"RSI da {prev['rsi']:.0f} a {p['rsi']:.0f}")
+    if prev.get("macd_hist") is not None:
+        segno_prev = "positivo" if prev["macd_hist"] > 0 else "negativo"
+        segno_oggi = "positivo" if (p.get("macd_hist") or 0) > 0 else "negativo"
+        if segno_prev != segno_oggi:
+            parti.append(f"MACD passato da {segno_prev} a {segno_oggi}")
+    return "; ".join(parti) if parti else "nessuna variazione significativa rispetto a ieri"
+
+def _regole_txt(p, regole_map):
+    """Le regole scritte dall'utente per questa posizione, in una riga —
+    cosi' il modello ha i fatti per trovare contraddizioni, senza doverli
+    dedurre da una tabella separata."""
+    regola = regole_map.get(p.get("isin")) or {}
+    if not any(regola.get(k) for k in ("stop", "target", "revisione", "tesi")):
+        return "nessuna regola scritta"
+    parti = []
+    if regola.get("stop"):
+        parti.append(f"stop {regola['stop']}")
+    if regola.get("target"):
+        parti.append(f"target {regola['target']}")
+    if regola.get("revisione"):
+        parti.append(f"revisione {regola['revisione'].strftime('%d/%m/%Y')}")
+    if regola.get("tesi"):
+        parti.append(f"tesi scritta: \"{regola['tesi']}\"")
+    return ", ".join(parti)
+
+def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices, regole_map=None):
+    regole_map = regole_map or {}
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
     def fmt(lst):
@@ -917,8 +957,10 @@ def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
 
     port_txt = "\n".join(
         f"- {p['name']} ({p.get('yf_symbol', p['symbol'])}): prezzo {p.get('price','n.d.')}, "
-        f"RSI {p.get('rsi','n.d.')}, trend {p.get('trend','n.d.')}, "
-        f"MACD {p.get('macd_str','n.d.')}, 1M {p.get('perf_1m','n.d.')}%, TV Rec: {p.get('rec_str','n.d.')}"
+        f"RSI {p.get('rsi','n.d.')}, trend {p.get('trend','n.d.')}, MACD {p.get('macd_str','n.d.')}, "
+        f"detenuta da {p.get('giorni_detenzione','n.d.')} giorni.\n"
+        f"  Rispetto a ieri: {_confronto_ieri(p)}.\n"
+        f"  Regole scritte dall'utente: {_regole_txt(p, regole_map)}."
         for p in portfolio
     ) or "Portafoglio vuoto."
 
@@ -927,39 +969,48 @@ def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
         for k, v in indices.items()
     )
 
-    prompt = f"""Sei un analista finanziario esperto. Data: {datetime.now().strftime('%d/%m/%Y')}.
+    prompt = f"""Descrivi fatti, non consigliare operazioni. Data: {datetime.now().strftime('%d/%m/%Y')}.
 
-I dati tecnici provengono da TradingView. MACD indica la direzione del momentum (↑ = rialzista, ↓ = ribassista).
-TV Rec è la raccomandazione aggregata di 26 indicatori TradingView (Compra Forte / Compra / Neutro / Vendi / Vendi Forte).
+REGOLA FONDAMENTALE: non suggerire mai di comprare, vendere, accumulare, ridurre
+posizioni o riallocare capitale. Non usare parole come "consiglio", "opportunità",
+"conviene", "meglio". Il tuo unico compito è descrivere COSA È CAMBIATO rispetto a
+ieri e segnalare eventuali CONTRADDIZIONI tra la tesi scritta dall'utente e i fatti
+attuali. La decisione resta sempre dell'utente: tu esponi i fatti, non giudichi.
+
+I dati tecnici provengono da TradingView e da uno storico giornaliero proprio.
+MACD indica la direzione del momentum. TV Rec è la raccomandazione aggregata di
+26 indicatori TradingView: la riporti come dato di fatto, non la usi per consigliare.
 
 INDICI:
 {idx_txt}
 
-TOP AZIONI ITALIANE (screener TV — filtro RSI+EMA+MACD):
+TITOLI IN "DA APPROFONDIRE" (screener — spunti di ricerca, non idee d'acquisto):
+Italia:
 {fmt(stocks_it)}
-
-TOP AZIONI USA (screener TV — filtro RSI+EMA+MACD+cap>100M):
+USA:
 {fmt(stocks_us)}
-
-TOP ETF (screener TV — filtro RSI+EMA+MACD):
+ETF:
 {fmt(etfs)}
 
-PORTAFOGLIO STEFANO:
+LE MIE POSIZIONI (conto B), con il confronto con ieri e le regole scritte dall'utente:
 {port_txt}
 
 Genera un JSON con questa struttura ESATTA (solo JSON puro, zero markdown):
 {{
-  "contesto_mercato": "2-3 frasi professionali su sentiment e indici",
-  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento (notizia, settore, dato macro, guidance) — non un consiglio operativo, non dire se comprare o vendere","rating":"Forte"}}],
-  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento (notizia, settore, dato macro, guidance) — non un consiglio operativo, non dire se comprare o vendere","rating":"Moderato"}}],
-  "etfs_analysis": [{{"symbol":"TICKER","tema":"AI / Semiconduttori / ecc.","motivazione":"2-3 righe","rating":"Forte"}}],
-  "portfolio_analysis": [{{"symbol":"TICKER","segnale":"Accumula","motivazione":"2-3 righe con riferimento a MACD e trend"}}],
-  "sintesi_portafoglio": "2-3 frasi di sintesi operativa"
+  "contesto_mercato": "2-3 frasi che descrivono cosa e' cambiato oggi sui mercati rispetto a ieri, nessun consiglio",
+  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento — mai un consiglio operativo, mai dire se comprare o vendere"}}],
+  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento — mai un consiglio operativo, mai dire se comprare o vendere"}}],
+  "etfs_analysis": [{{"symbol":"TICKER","tema":"AI / Semiconduttori / ecc.","motivazione":"2-3 righe descrittive — mai un consiglio operativo"}}],
+  "cambiamenti_posizioni": [{{"symbol":"TICKER","descrizione":"cosa e' cambiato rispetto a ieri per questa posizione, solo fatti (prezzo, RSI, trend, MACD) — se non c'e' un cambiamento degno di nota NON includere questa posizione nell'elenco"}}],
+  "contraddizioni_posizioni": [{{"symbol":"TICKER","contraddizione":"SOLO se la tesi scritta dall'utente e' in conflitto di significato con i fatti attuali (es. la tesi presuppone una condizione che i fatti di oggi negano) — non ripetere il confronto numerico stop/target/giorni di detenzione, il report li mostra già altrove — se non c'e' una tesi scritta o nessun conflitto reale, NON includere questa posizione nell'elenco"}}]
 }}
-Per stocks_it_analysis e stocks_us_analysis questi titoli sono spunti di ricerca, non idee d'acquisto:
-la motivazione deve spiegare PERCHÉ il titolo si muove (il fatto), mai cosa farne.
-Rating: Forte o Moderato. Segnale: Accumula, Mantieni o Riduci.
-Usa il campo symbol uguale al ticker TV per portfolio_analysis (es. "OMER", "PANW", "MIL:SMH").
+Per stocks_it_analysis, stocks_us_analysis ed etfs_analysis questi titoli sono spunti
+di ricerca, non idee d'acquisto: la motivazione deve spiegare PERCHÉ il titolo si
+muove (il fatto), mai cosa farne.
+cambiamenti_posizioni e contraddizioni_posizioni sono array che possono restare
+vuoti: non forzare un'osservazione dove non ce n'è una vera.
+Usa il campo symbol uguale al ticker TV, senza prefisso exchange quando possibile
+(es. "OMER", "PANW", "MIL:SMH" se serve disambiguare).
 Per qualsiasi ETF a leva menziona sempre il rischio decay da leva giornaliera."""
 
     msg = client.messages.create(
@@ -1288,10 +1339,14 @@ def eventi_prossimi_html(eventi, giorni_max=30):
         for e in prossimi
     )
 
-def note_fattuali_html(p, regola):
+def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
     """Domande/osservazioni fattuali, non giudizi: confronta lo stato attuale
     con i tuoi dati (storico personale) e con quello che hai scritto tu
-    (stop/target/revisione). Nessun badge Mantieni/Riduci/Evitare."""
+    (stop/target/revisione). Nessun badge Mantieni/Riduci/Evitare.
+    cambiamento e contraddizione sono testo generato dal modello (Fase 6):
+    solo descrizione di cosa e' cambiato da ieri e di eventuali conflitti tra
+    la tesi scritta e i fatti — mai un consiglio — e vengono mostrati in un
+    colore diverso per restare distinguibili dai fatti calcolati qui sotto."""
     note = []
     price = p.get("price")
     giorni = p.get("giorni_detenzione")
@@ -1311,11 +1366,19 @@ def note_fattuali_html(p, regola):
     if revisione and date.today() > revisione:
         note.append(f"Data di revisione ({revisione.strftime('%d/%m/%Y')}) superata.")
 
-    if not note:
-        return '<span style="color:#999;font-size:12px">—</span>'
-    return "<br>".join(f'<span style="font-size:12px;color:#92400e">▸ {n}</span>' for n in note)
+    righe = [f'<span style="font-size:12px;color:#92400e">▸ {n}</span>' for n in note]
+    if cambiamento:
+        righe.append(f'<span style="font-size:12px;color:#1d4ed8">↻ {cambiamento}</span>')
+    if contraddizione:
+        righe.append(f'<span style="font-size:12px;color:#7c3aed">⚠ Tesi vs fatti: {contraddizione}</span>')
 
-def posizioni_rows(portfolio, regole_map):
+    if not righe:
+        return '<span style="color:#999;font-size:12px">—</span>'
+    return "<br>".join(righe)
+
+def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None):
+    cambiamenti_map = cambiamenti_map or {}
+    contraddizioni_map = contraddizioni_map or {}
     if not portfolio:
         return ('<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">'
                 'Nessuna posizione aperta sul conto B (dossier non ancora caricato, vedi README).</td></tr>')
@@ -1323,6 +1386,10 @@ def posizioni_rows(portfolio, regole_map):
     for p in portfolio:
         isin = p.get("isin")
         regola = regole_map.get(isin) or {}
+        sym_key = p.get("yf_symbol", p.get("symbol", ""))
+        bare_key = sym_key.split(":")[-1] if ":" in sym_key else sym_key
+        cambiamento = (cambiamenti_map.get(sym_key) or cambiamenti_map.get(bare_key) or {}).get("descrizione")
+        contraddizione = (contraddizioni_map.get(sym_key) or contraddizioni_map.get(bare_key) or {}).get("contraddizione")
         price = p.get("price")
         ema50, ema200 = p.get("ema50") or 0, p.get("ema200") or 0
 
@@ -1359,7 +1426,7 @@ def posizioni_rows(portfolio, regole_map):
             <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}</td>
             <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
             <td>{eventi_prossimi_html(regola.get('eventi'))}</td>
-            <td>{note_fattuali_html(p, regola)}</td>
+            <td>{note_fattuali_html(p, regola, cambiamento, contraddizione)}</td>
             <td class="wrap"><div style="color:#444;font-size:12px">{tesi_html}</div></td>
         </tr>"""
     return rows
@@ -1450,6 +1517,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     sm_it  = _analysis_map(analysis.get("stocks_it_analysis", []))
     sm_us  = _analysis_map(analysis.get("stocks_us_analysis", []))
     em     = _analysis_map(analysis.get("etfs_analysis", []))
+    cm     = _analysis_map(analysis.get("cambiamenti_posizioni", []))
+    cx     = _analysis_map(analysis.get("contraddizioni_posizioni", []))
 
     # Contesto di mercato per Raccomandazione
     mkt_it = indices.get("FTSE MIB") or 0
@@ -2062,7 +2131,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
         <th>Distanza da stop</th><th>Distanza da target</th><th>Trend medio periodo</th>
         <th>Eventi (30gg)</th><th>Da notare</th><th>Tesi scritta</th>
       </tr></thead>
-      <tbody>{posizioni_rows(portfolio, regole_map)}</tbody>
+      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx)}</tbody>
     </table>
     <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto in data/regole_posizioni.yaml. La decisione resta tua.</p>
   </div>
@@ -2275,7 +2344,7 @@ def main():
     storico.record_daily(portfolio, stocks_it + stocks_us)
 
     logger.info("Generating analysis with Claude...")
-    analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices)
+    analysis = generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices, regole_map)
 
     logger.info("Building HTML...")
     pwd = os.environ.get("SITE_PASSWORD", "")

@@ -114,6 +114,16 @@ def load_history(symbol=None, isin=None, categoria=None, path=None):
     return righe
 
 
+def valore_precedente(symbol=None, isin=None, categoria=None, path=None):
+    """L'ultima riga PRECEDENTE a oggi per questo titolo (None se non esiste:
+    primo run per questo titolo, o storico non ancora accumulato). Usato dal
+    prompt di analisi (Fase 6) per descrivere cosa e' cambiato rispetto a
+    ieri, invece di farlo indovinare al modello."""
+    storia = load_history(symbol=symbol, isin=isin, categoria=categoria, path=path)
+    precedenti = [r for r in storia if r["data"] < date.today()]
+    return precedenti[-1] if precedenti else None
+
+
 def giorni_in_stato(key_value, predicate, current_value, key="isin", path=None):
     """Da quanti giorni consecutivi (fino a oggi incluso) predicate(riga) e'
     rimasto uguale a current_value per key==key_value.
