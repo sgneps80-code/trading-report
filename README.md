@@ -27,25 +27,37 @@ impostato `MOVIMENTI_XLSX_B64`: stesso principio, mai un file committato.
 
 ## Sincronizzazione posizioni (conto B)
 
-Le posizioni aperte non si aggiornano più a mano: vengono ricostruite in FIFO
-dall'export del broker.
+Le posizioni aperte non si aggiornano più a mano. Il modo più semplice è
+dalla pagina del report stesso ("📂 Sincronizza dati personali": carica il
+file, compila ticker/stop/target/tesi nella tabella che appare, salva) —
+i punti sotto spiegano cosa succede dietro le quinte.
 
-1. Esporta dal tuo dossier titoli il file "Movimenti Dossier Titoli" (colonne:
-   Operazione, Data valuta, Descrizione, Titolo, ISIN, Segno A/V, Quantità,
-   Divisa, Prezzo, Cambio, Controvalore) e mettilo nel secret
-   `MOVIMENTI_XLSX_B64` (base64), **non committarlo**.
-2. Mappa ogni ISIN a un ticker TradingView nel secret `ISIN_MAP_JSON`:
-   ```json
-   {
-     "IT0003132476": { "tv_symbol": "MIL:ENI", "name": "Eni", "type": "Azione" }
-   }
-   ```
-   `tv_symbol` è `EXCHANGE:TICKER` (`MIL:` per Borsa Italiana) oppure solo
-   `TICKER` per i titoli USA. `type` è `Azione` o `ETF`. Gli ISIN non mappati
-   compaiono nei log del workflow con un warning, e il titolo resta nel
-   report senza dati tecnici finché non lo mappi.
-3. Ogni run del report rilegge il dossier e ricalcola le posizioni aperte:
-   quelle chiuse (quantità residua zero) spariscono automaticamente.
+**Due formati di export sono riconosciuti automaticamente**, in .xlsx o
+.xls (vecchio formato Excel binario — capita spesso con i broker italiani,
+gestito con `xlrd` oltre a `openpyxl`):
+
+- **"Movimenti Dossier Titoli"** (storico: Operazione, Data valuta,
+  Descrizione, Titolo, ISIN, Segno A/V, Quantità, Divisa, Prezzo, Cambio,
+  Controvalore) — ricostruisce le posizioni in FIFO. Unico formato che dà
+  la data di apertura reale, quindi i giorni di detenzione.
+- **"Portafoglio di sintesi"** (snapshot attuale: Titolo, ISIN, Simbolo,
+  Mercato, Strumento, Valuta, Quantità, P.zo medio di carico...) — ogni
+  riga è già una posizione aperta, quantità e prezzo medio già calcolati
+  dal broker. Non contiene una data di apertura: i giorni di detenzione
+  restano n.d. per queste posizioni, non un numero inventato.
+
+Il file va nel secret `MOVIMENTI_XLSX_B64` (base64), **mai committato**.
+
+**Il ticker TradingView non è più del tutto manuale**: se il formato è
+"Portafoglio di sintesi", la colonna Simbolo (es. `ISP.MI`) genera un
+suggerimento (`MIL:ISP`) che pre-compila l'editor sulla pagina — resta un
+suggerimento da verificare, non un dato certo, perché il suffisso del
+broker non sempre corrisponde 1:1 all'exchange TradingView (es. `1SMCI.MI`
+non diventa automaticamente il ticker giusto). Confermalo o correggilo,
+poi resta salvato in `ISIN_MAP_JSON`.
+
+Ogni run rilegge il dossier e ricalcola le posizioni aperte: quelle chiuse
+(o assenti dal nuovo export) spariscono automaticamente.
 
 ## Regole di posizione e calendario
 
