@@ -10,6 +10,18 @@ on:
         description: 'Portfolio JSON aggiornato (lascia vuoto per run schedulato)'
         required: false
         default: ''
+      movimenti_xlsx_b64:
+        description: 'Dossier XLS in base64, dalla pagina del report (lascia vuoto per run schedulato)'
+        required: false
+        default: ''
+      isin_map_json:
+        description: 'Mappa ISIN->TradingView JSON, dalla pagina del report (lascia vuoto per run schedulato)'
+        required: false
+        default: ''
+      regole_posizioni_yaml:
+        description: 'Regole di posizione YAML, dalla pagina del report (lascia vuoto per run schedulato)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -39,19 +51,30 @@ jobs:
           SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
           # Repo pubblico: dati personali (dossier, ISIN, regole, watchlist,
           # sale per pseudonimizzare lo storico) SOLO da secret, mai committati.
-          MOVIMENTI_XLSX_B64: ${{ secrets.MOVIMENTI_XLSX_B64 }}
-          ISIN_MAP_JSON: ${{ secrets.ISIN_MAP_JSON }}
-          REGOLE_POSIZIONI_YAML: ${{ secrets.REGOLE_POSIZIONI_YAML }}
+          # Un input manuale (dalla pagina del report) vale per il run corrente
+          # anche prima che lo step sotto lo salvi come secret per i run futuri.
+          MOVIMENTI_XLSX_B64: ${{ inputs.movimenti_xlsx_b64 != '' && inputs.movimenti_xlsx_b64 || secrets.MOVIMENTI_XLSX_B64 }}
+          ISIN_MAP_JSON: ${{ inputs.isin_map_json != '' && inputs.isin_map_json || secrets.ISIN_MAP_JSON }}
+          REGOLE_POSIZIONI_YAML: ${{ inputs.regole_posizioni_yaml != '' && inputs.regole_posizioni_yaml || secrets.REGOLE_POSIZIONI_YAML }}
           WATCHLIST_YAML: ${{ secrets.WATCHLIST_YAML }}
           STORICO_SALT: ${{ secrets.STORICO_SALT }}
         run: python generate_report.py
 
-      - name: Salva portafoglio aggiornato come secret
-        if: ${{ inputs.portfolio_json != '' }}
+      - name: Salva dati personali aggiornati come secret
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           NEW_PORTFOLIO: ${{ inputs.portfolio_json }}
-        run: echo "$NEW_PORTFOLIO" | gh secret set PORTFOLIO_JSON
+          NEW_MOVIMENTI: ${{ inputs.movimenti_xlsx_b64 }}
+          NEW_ISIN_MAP: ${{ inputs.isin_map_json }}
+          NEW_REGOLE: ${{ inputs.regole_posizioni_yaml }}
+        # Valori passati via env, non interpolati direttamente nello script:
+        # un input che contenesse `"` o `` ` `` interpolato inline in un
+        # comando shell sarebbe un'iniezione di comandi sul runner.
+        run: |
+          if [ -n "$NEW_PORTFOLIO" ]; then printf '%s' "$NEW_PORTFOLIO" | gh secret set PORTFOLIO_JSON; fi
+          if [ -n "$NEW_MOVIMENTI" ]; then printf '%s' "$NEW_MOVIMENTI" | gh secret set MOVIMENTI_XLSX_B64; fi
+          if [ -n "$NEW_ISIN_MAP" ]; then printf '%s' "$NEW_ISIN_MAP" | gh secret set ISIN_MAP_JSON; fi
+          if [ -n "$NEW_REGOLE" ]; then printf '%s' "$NEW_REGOLE" | gh secret set REGOLE_POSIZIONI_YAML; fi
 
       - name: Commit and push report
         run: |

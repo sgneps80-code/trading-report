@@ -2020,29 +2020,32 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (timeout) setTimeout(() => {{ el.textContent = ""; }}, timeout);
   }}
 
-  async function triggerReport(btn) {{
+  async function dispatchWorkflow(inputs) {{
     const owner = localStorage.getItem("gh_owner");
     const repo  = localStorage.getItem("gh_repo");
     const token = localStorage.getItem("gh_token");
     if (!owner || !repo || !token) {{
       showGhConfig();
-      setStatus("⚠️ Configura prima le impostazioni GitHub", "#d97706");
-      return;
+      throw new Error("Configura prima le impostazioni GitHub");
     }}
+    const wfR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/workflows/trading_report.yml/dispatches`, {{
+      method:"POST",
+      headers:{{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json","Content-Type":"application/json"}},
+      body:JSON.stringify({{ref:"main", inputs}})
+    }});
+    if (wfR.status !== 204) {{
+      const err = await wfR.text();
+      throw new Error(`HTTP ${{wfR.status}}: ${{err}}`);
+    }}
+  }}
+
+  async function triggerReport(btn) {{
     const valid = editorPortfolio.filter(p => p.symbol.trim() && p.name.trim());
     if (!valid.length) {{ setStatus("⚠️ Aggiungi almeno un titolo valido", "#d97706"); return; }}
     btn.disabled = true;
     try {{
       setStatus("⏳ Avvio generazione report...", "#d97706");
-      const wfR = await fetch(`https://api.github.com/repos/${{owner}}/${{repo}}/actions/workflows/trading_report.yml/dispatches`, {{
-        method:"POST",
-        headers:{{"Authorization":`Bearer ${{token}}`,"Accept":"application/vnd.github+json","Content-Type":"application/json"}},
-        body:JSON.stringify({{ref:"main", inputs:{{portfolio_json: JSON.stringify(valid)}}}})
-      }});
-      if (wfR.status !== 204) {{
-        const err = await wfR.text();
-        throw new Error(`HTTP ${{wfR.status}}: ${{err}}`);
-      }}
+      await dispatchWorkflow({{portfolio_json: JSON.stringify(valid)}});
       localStorage.setItem("editor_portfolio", JSON.stringify(valid));
       editorPortfolio = valid;
       renderEditorTable();
@@ -2052,6 +2055,64 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     }} finally {{
       btn.disabled = false;
     }}
+  }}
+
+  async function caricaDossier(btn) {{
+    const fileInput = document.getElementById("xls-file");
+    const file = fileInput.files[0];
+    if (!file) {{ setSyncStatus("⚠️ Scegli un file XLS", "#d97706"); return; }}
+    btn.disabled = true;
+    try {{
+      setSyncStatus("⏳ Lettura file...", "#d97706");
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const b64 = btoa(binary);
+      setSyncStatus("⏳ Caricamento dossier e avvio sincronizzazione...", "#d97706");
+      await dispatchWorkflow({{movimenti_xlsx_b64: b64}});
+      setSyncStatus("✅ Dossier caricato! Report pronto in ~3-5 minuti. Premi F5 per aggiornare.", "#16a34a");
+    }} catch(e) {{
+      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
+    }} finally {{
+      btn.disabled = false;
+    }}
+  }}
+
+  async function salvaIsinMap(btn) {{
+    const testo = document.getElementById("isin-map-text").value.trim();
+    if (!testo) {{ setSyncStatus("⚠️ Scrivi la mappa ISIN prima di salvare", "#d97706"); return; }}
+    try {{ JSON.parse(testo); }} catch(e) {{ setSyncStatus("❌ JSON non valido: " + e.message, "#dc2626"); return; }}
+    btn.disabled = true;
+    try {{
+      setSyncStatus("⏳ Salvataggio mappa ISIN...", "#d97706");
+      await dispatchWorkflow({{isin_map_json: testo}});
+      setSyncStatus("✅ Mappa salvata! Report pronto in ~3-5 minuti.", "#16a34a");
+    }} catch(e) {{
+      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
+    }} finally {{
+      btn.disabled = false;
+    }}
+  }}
+
+  async function salvaRegole(btn) {{
+    const testo = document.getElementById("regole-text").value.trim();
+    if (!testo) {{ setSyncStatus("⚠️ Scrivi le regole prima di salvare", "#d97706"); return; }}
+    btn.disabled = true;
+    try {{
+      setSyncStatus("⏳ Salvataggio regole...", "#d97706");
+      await dispatchWorkflow({{regole_posizioni_yaml: testo}});
+      setSyncStatus("✅ Regole salvate! Report pronto in ~3-5 minuti.", "#16a34a");
+    }} catch(e) {{
+      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
+    }} finally {{
+      btn.disabled = false;
+    }}
+  }}
+
+  function setSyncStatus(msg, color) {{
+    const el = document.getElementById("sync-status");
+    if (el) {{ el.textContent = msg; el.style.color = color; }}
   }}
 </script>
 """ if password_hash else ""
@@ -2282,6 +2343,46 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       <span id="editor-status" style="font-size:13px"></span>
     </div>
     <p style="font-size:11px;color:#999;margin-top:10px">Il portafoglio aggiornato viene usato subito e salvato come secret GitHub dal workflow — non è visibile nel repository.</p>
+  </div>
+
+  <!-- SINCRONIZZA DATI PERSONALI -->
+  <div class="section">
+    <h2>📂 Sincronizza dati personali</h2>
+    <p style="font-size:13px;color:#555;margin-bottom:20px">Usa le stesse credenziali GitHub di "Aggiorna Portafoglio" qui sopra. Ogni salvataggio aggiorna il secret corrispondente e avvia subito un nuovo report — nessun file finisce nel repository, nessun secret da impostare a mano su GitHub.</p>
+
+    <div style="margin-bottom:24px">
+      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Dossier titoli (XLS)</label>
+      <p style="font-size:12px;color:#666;margin-bottom:8px">Il file "Movimenti Dossier Titoli" esportato dal tuo broker. Ricostruisce le posizioni aperte in FIFO automaticamente ogni volta che lo ricarichi.</p>
+      <input id="xls-file" type="file" accept=".xlsx" style="margin-bottom:8px;display:block;font-size:13px">
+      <button onclick="caricaDossier(this)"
+        style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+        Carica e sincronizza
+      </button>
+    </div>
+
+    <div style="margin-bottom:24px">
+      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Mappa ISIN → TradingView</label>
+      <p style="font-size:12px;color:#666;margin-bottom:8px">Una voce per ISIN — serve una sola volta per titolo, non a ogni caricamento del dossier.</p>
+      <textarea id="isin-map-text" rows="4" placeholder='{{&quot;IT0003132476&quot;: {{&quot;tv_symbol&quot;: &quot;MIL:ENI&quot;, &quot;name&quot;: &quot;Eni&quot;, &quot;type&quot;: &quot;Azione&quot;}}}}'
+        style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace;margin-bottom:8px"></textarea>
+      <button onclick="salvaIsinMap(this)"
+        style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+        Salva mappa
+      </button>
+    </div>
+
+    <div>
+      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Regole di posizione (stop / target / tesi)</label>
+      <p style="font-size:12px;color:#666;margin-bottom:8px">Una voce per ISIN, formato YAML. Sostituisce tutte le regole scritte finora — ricopia anche quelle che non cambiano.</p>
+      <textarea id="regole-text" rows="6" placeholder="IT0003132476:&#10;  stop: 12.50&#10;  target: 16.00&#10;  tesi: &quot;...&quot;"
+        style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace;margin-bottom:8px"></textarea>
+      <button onclick="salvaRegole(this)"
+        style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+        Salva regole
+      </button>
+    </div>
+
+    <p id="sync-status" style="font-size:13px;margin-top:16px"></p>
   </div>
 
   <!-- FOOTER -->
