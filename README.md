@@ -29,14 +29,25 @@ per titolo) e `data/eventi_macro.yaml` (riunioni BCE/Fed) — schema e istruzion
 nei commenti dei due file. Il report confronta lo stato attuale con questi
 valori, non genera giudizi propri.
 
-## Storico persistente
+## Storico: due fonti diverse, per due scopi diversi
 
-`data/storico_indicatori.csv` accumula una riga al giorno per ogni posizione
-aperta e per ogni titolo uscito in "Da approfondire" (prezzo, RSI, EMA,
-MACD, performance). Viene scritto automaticamente dal workflow e committato
-insieme al report — non richiede manutenzione. Serve a due cose:
-- calcolare i segnali di medio periodo su base settimanale (in arrivo);
-- verificare, col tempo, se i segnali del report si sono confermati o no.
+**EMA, incroci, indicatori di medio periodo** (Sezione 1 e i segnali della
+Sezione 4) non aspettano che il nostro log si accumuli: ogni run scarica 2
+anni di storico reale (`fetch_ohlc_range`, stesso endpoint Yahoo Finance già
+usato per le candele a 5 giorni) e calcola EMA e incroci su dati di mercato
+veri, disponibili da subito — non su un file che parte vuoto. "Da quanti
+giorni" è quindi un numero reale dal primo run, non una stima che cresce nei
+mesi. Se Yahoo non risponde per un titolo, il report ricade sul log proprio
+(`data/storico_indicatori.csv`, sotto) e poi sullo stato del solo giorno
+corrente, senza durata — mai un dato inventato.
+
+**`data/storico_indicatori.csv`** accumula invece una riga al giorno per
+ogni posizione aperta e per ogni titolo uscito in "Da approfondire" (prezzo,
+RSI, EMA, MACD, performance). Serve a quello che *non* si può retrodatare:
+verificare, col tempo, se i segnali del report si sono confermati o no —
+questo richiede davvero che il tempo passi, perché dipende da cosa succede
+dopo la segnalazione, non da storico di mercato già esistente. Resta anche
+il ripiego di prima istanza se Yahoo non risponde per una posizione.
 
 Cresce di poche decine di righe al giorno (qualche MB all'anno): non è
 previsto un meccanismo di pulizia perché non ne ha bisogno nel breve-medio

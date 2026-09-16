@@ -7,12 +7,13 @@ AI:        Anthropic Claude Haiku
 """
 
 import os, json, hashlib, logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import requests
 import anthropic
 import portfolio_sync
 import regole
 import storico
+import indicatori_storici
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -642,6 +643,44 @@ def fetch_5d_ohlc(tv_symbol):
         logger.warning(f"5gg OHLC {ysym}: {e}")
         return []
 
+def fetch_ohlc_range(tv_symbol, range_="2y", interval="1d"):
+    """Storico OHLC reale da Yahoo Finance (stesso endpoint di fetch_5d_ohlc,
+    solo con una finestra piu' ampia). Serve per calcolare indicatori di
+    medio periodo su dati di mercato VERI fin dal primo run, invece di
+    aspettare che il nostro log giornaliero (storico.py) si accumuli per
+    mesi: quel log non puo' essere retrodatato, la storia dei prezzi si'.
+    Restituisce [] in caso di errore, senza rompere il report."""
+    ysym = tv_to_yahoo_symbol(tv_symbol)
+    if not ysym:
+        return []
+    url = (f"https://query1.finance.yahoo.com/v8/finance/chart/{ysym}"
+           f"?range={range_}&interval={interval}")
+    try:
+        r = requests.get(url, headers=_YF_HEADERS, timeout=15)
+        if r.status_code != 200:
+            logger.warning(f"Storico OHLC {ysym}: HTTP {r.status_code}")
+            return []
+        res = (r.json().get("chart") or {}).get("result") or []
+        if not res:
+            return []
+        timestamps = res[0].get("timestamp") or []
+        quotes = (res[0].get("indicators") or {}).get("quote") or [{}]
+        q = quotes[0]
+        o, h, l, c, v = (q.get(k) or [] for k in ("open", "high", "low", "close", "volume"))
+        bars = []
+        for i in range(min(len(timestamps), len(o), len(h), len(l), len(c))):
+            if None in (o[i], h[i], l[i], c[i]):
+                continue
+            bars.append({
+                "data": datetime.fromtimestamp(timestamps[i], tz=timezone.utc).date(),
+                "o": o[i], "h": h[i], "l": l[i], "c": c[i],
+                "v": v[i] if v and i < len(v) and v[i] is not None else None,
+            })
+        return bars
+    except Exception as e:
+        logger.warning(f"Storico OHLC {ysym}: {e}")
+        return []
+
 def enrich_5d(rows, etichetta=""):
     """Aggiunge bars_5d e perf_5d a ogni riga. Fallisce in silenzio sul singolo titolo."""
     for r in rows:
@@ -652,6 +691,18 @@ def enrich_5d(rows, etichetta=""):
             r["perf_5d"] = round((bars[-1]["c"] / bars[0]["c"] - 1) * 100, 1)
         else:
             r["perf_5d"] = None
+
+def enrich_storico_esteso(rows, etichetta="", range_="2y"):
+    """Aggiunge bars_2y (storico OHLC reale) a ogni riga: serve a calcolare
+    EMA vere e la data effettiva dei loro incroci fin dal primo run, invece
+    di aspettare che il nostro log giornaliero (storico.py) si accumuli per
+    mesi. Fallisce in silenzio sul singolo titolo (vedi fetch_ohlc_range)."""
+    for r in rows:
+        sym = r.get("tv_symbol") or r.get("yf_symbol") or r.get("symbol")
+        r["bars_2y"] = fetch_ohlc_range(sym, range_)
+    ok = sum(1 for r in rows if r.get("bars_2y"))
+    logger.info(f"Storico 2 anni{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
+    return rows
     ok = sum(1 for r in rows if r.get("bars_5d"))
     logger.info(f"5gg OHLC{' ' + etichetta if etichetta else ''}: {ok}/{len(rows)} recuperati")
     return rows
@@ -1253,14 +1304,26 @@ def posizioni_rows(portfolio, regole_map):
         regola = regole_map.get(isin) or {}
         price = p.get("price")
         ema50, ema200 = p.get("ema50") or 0, p.get("ema200") or 0
-        sopra50 = bool(price and ema50 and price > ema50)
-        sopra200 = bool(price and ema200 and price > ema200)
-        g50, certo50 = storico.giorni_in_stato(
-            isin, lambda r: bool(r["close"] and r["ema50"] and r["close"] > r["ema50"]), sopra50
-        ) if isin else (None, False)
-        g200, certo200 = storico.giorni_in_stato(
-            isin, lambda r: bool(r["close"] and r["ema200"] and r["close"] > r["ema200"]), sopra200
-        ) if isin else (None, False)
+
+        # 1) Storico reale (2 anni da Yahoo): EMA vere, data di incrocio vera.
+        bars = p.get("bars_2y") or []
+        sopra50, g50, certo50 = indicatori_storici.trend_vs_ema(bars, 50)
+        sopra200, g200, certo200 = indicatori_storici.trend_vs_ema(bars, 200)
+
+        # 2) Storico Yahoo non disponibile per questo titolo: ripiego sul
+        # nostro log giornaliero (storico.py) — "almeno N giorni" finche' non
+        # ha visto un cambio di stato — e in assenza anche di quello, sullo
+        # stato del solo giorno corrente (nessuna durata).
+        if sopra50 is None:
+            sopra50 = bool(price and ema50 and price > ema50)
+            g50, certo50 = storico.giorni_in_stato(
+                isin, lambda r: bool(r["close"] and r["ema50"] and r["close"] > r["ema50"]), sopra50
+            ) if isin else (None, False)
+        if sopra200 is None:
+            sopra200 = bool(price and ema200 and price > ema200)
+            g200, certo200 = storico.giorni_in_stato(
+                isin, lambda r: bool(r["close"] and r["ema200"] and r["close"] > r["ema200"]), sopra200
+            ) if isin else (None, False)
         price_str = f"{price:.2f}" if price else "n.d."
         divisa = p.get("divisa") or ""
         tesi = regola.get("tesi") or ""
@@ -2106,6 +2169,9 @@ def main():
     enrich_5d(stocks_us, "azioni US")
     enrich_5d(etfs,      "ETP")
     enrich_5d(portfolio, "portafoglio")
+
+    logger.info("Recupero storico 2 anni per le posizioni (EMA reali, non stimate)...")
+    enrich_storico_esteso(portfolio, "portafoglio")
 
     logger.info("Caricamento regole posizioni e calendario macro...")
     regole_map = regole.load_regole()
