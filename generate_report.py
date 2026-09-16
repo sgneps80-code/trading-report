@@ -10,18 +10,25 @@ import os, json, hashlib, logging
 from datetime import datetime
 import requests
 import anthropic
+import portfolio_sync
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # ─── PORTFOLIO ────────────────────────────────────────────────────────────────
+# Priorita': override manuale da workflow_dispatch > dossier XLS sincronizzato
+# (fonte primaria, vedi portfolio_sync.py) > vecchio secret JSON come ripiego,
+# per non rompere il report se il dossier non e' stato ancora caricato nel repo.
 _portfolio_input = os.environ.get("PORTFOLIO_INPUT", "").strip()
 if _portfolio_input:
     PORTFOLIO = json.loads(_portfolio_input)
-    logger.info("Portfolio caricato da workflow_dispatch")
+    logger.info("Portfolio caricato da workflow_dispatch (override manuale)")
+elif os.path.exists(portfolio_sync.MOVIMENTI_PATH):
+    PORTFOLIO = portfolio_sync.sync_portfolio()
+    logger.info(f"Portfolio sincronizzato da dossier XLS: {len(PORTFOLIO)} posizioni aperte")
 else:
     PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
-    logger.info("Portfolio caricato da PORTFOLIO_JSON secret")
+    logger.info("Portfolio caricato da PORTFOLIO_JSON secret (legacy: nessun dossier XLS trovato)")
 
 # ─── TRADINGVIEW API ──────────────────────────────────────────────────────────
 TV_HEADERS = {
@@ -760,6 +767,14 @@ def get_portfolio_data():
                 "rec_str": "n.d.", "rec": 0,
                 "candle_d": "—", "candle_w": "—",
             }
+        # Campi ricostruiti dal dossier XLS (portfolio_sync): assenti se il
+        # portafoglio arriva ancora dal vecchio secret PORTFOLIO_JSON.
+        parsed["isin"]              = item.get("isin")
+        parsed["quantita"]          = item.get("quantita")
+        parsed["prezzo_medio"]      = item.get("prezzo_medio")
+        parsed["divisa"]            = item.get("divisa")
+        parsed["data_apertura"]     = item.get("data_apertura")
+        parsed["giorni_detenzione"] = item.get("giorni_detenzione")
         out.append(parsed)
     return out
 
