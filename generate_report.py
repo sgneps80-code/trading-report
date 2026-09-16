@@ -1506,9 +1506,10 @@ def _analysis_map(items):
             m.setdefault(bare.split(":")[-1], a)
     return m
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="", portfolio_base="[]",
-               regole_map=None, calendario=None, segnali_items=None):
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="",
+               regole_map=None, calendario=None, segnali_items=None, regole_editor_data=None):
     regole_map = regole_map or {}
+    regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False)
     calendario = calendario or []
     segnali_items = segnali_items or []
     today = datetime.now().strftime("%d %B %Y")
@@ -1553,7 +1554,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     lock_script = f"""
 <script>
   const HASH = "{password_hash}";
-  const PORTFOLIO_BASE = {portfolio_base};
+  const REGOLE_ATTUALI = {regole_editor_json};
 
   // ─── Autenticazione ───────────────────────────────────────────────────────
   async function sha256(msg) {{
@@ -1567,7 +1568,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       document.getElementById("report").style.display = "block";
       localStorage.setItem("tr_auth", h);
       localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
-      initEditor();
+      initSync();
     }} else {{
       document.getElementById("err").style.display = "block";
     }}
@@ -1579,422 +1580,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (h && exp && Date.now() < +exp && h === HASH) {{
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
-      initEditor();
+      initSync();
     }}
   }})();
-
-  // ─── Editor Portafoglio ───────────────────────────────────────────────────
-  let editorPortfolio = [];
-
-  function initEditor() {{
-    const saved = localStorage.getItem("editor_portfolio");
-    const parsed = saved ? JSON.parse(saved) : null;
-    editorPortfolio = (parsed && parsed.length > 0) ? parsed : JSON.parse(JSON.stringify(PORTFOLIO_BASE));
-    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
-    renderEditorTable();
-    const owner = localStorage.getItem("gh_owner") || "";
-    const repo  = localStorage.getItem("gh_repo")  || "";
-    const token = localStorage.getItem("gh_token") || "";
-    document.getElementById("gh-owner").value = owner;
-    document.getElementById("gh-repo").value  = repo;
-    if (owner && repo && token) {{
-      document.getElementById("gh-config").style.display = "none";
-      document.getElementById("gh-config-saved").style.display = "block";
-    }}
-  }}
-
-  function renderEditorTable() {{
-    document.getElementById("editor-tbody").innerHTML = editorPortfolio.map(function(item, i) {{
-      return '<tr style="border-bottom:1px solid #e2e8f0">' +
-        '<td style="padding:8px 6px;width:36px;text-align:center">' +
-          '<input type="checkbox" class="row-cb" data-i="' + i + '" style="width:16px;height:16px;cursor:pointer">' +
-        '</td>' +
-        '<td style="padding:8px 6px;font-family:monospace;font-size:13px;font-weight:600;color:#1e3a5f">' + item.symbol + '</td>' +
-        '<td style="padding:8px 6px;font-size:13px">' + item.name + '</td>' +
-        '<td style="padding:8px 6px;font-size:12px;color:#666">' + (item.type || 'Azione') + '</td>' +
-        '<td style="padding:8px 6px;text-align:center">' +
-          '<button onclick="removeItem(' + i + ')" title="Rimuovi" ' +
-            'style="color:#dc2626;background:none;border:none;cursor:pointer;font-size:20px;line-height:1;padding:2px">×</button>' +
-        '</td>' +
-        '</tr>';
-    }}).join("");
-  }}
-
-  function toggleAll(cb) {{
-    document.querySelectorAll(".row-cb").forEach(function(c) {{ c.checked = cb.checked; }});
-  }}
-
-  function deleteSelected() {{
-    var toDelete = new Set([].slice.call(document.querySelectorAll(".row-cb:checked")).map(function(c) {{ return +c.dataset.i; }}));
-    if (!toDelete.size) {{ setStatus("⚠️ Nessun titolo selezionato", "#d97706", 3000); return; }}
-    editorPortfolio = editorPortfolio.filter(function(_, i) {{ return !toDelete.has(i); }});
-    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
-    var allCb = document.getElementById("check-all");
-    if (allCb) allCb.checked = false;
-    renderEditorTable();
-  }}
-
-  function removeItem(i) {{
-    editorPortfolio.splice(i, 1);
-    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
-    renderEditorTable();
-  }}
-
-  // ─── Ricerca titoli ───────────────────────────────────────────────────────
-  var STATIC_STOCKS = [
-    // ── Italiani (Borsa Milano) ──
-    {{symbol:"ENI.MI",shortname:"ENI",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"ENEL.MI",shortname:"Enel",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"ISP.MI",shortname:"Intesa Sanpaolo",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"UCG.MI",shortname:"UniCredit",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"STLAM.MI",shortname:"Stellantis",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"MB.MI",shortname:"Mediobanca",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"G.MI",shortname:"Generali",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"LDO.MI",shortname:"Leonardo",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"RACE.MI",shortname:"Ferrari",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"MONC.MI",shortname:"Moncler",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"PRY.MI",shortname:"Prysmian",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"BAMI.MI",shortname:"Banco BPM",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"BPSO.MI",shortname:"BPER Banca",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"BMPS.MI",shortname:"Banca Monte dei Paschi",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"TIT.MI",shortname:"Telecom Italia",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"SRG.MI",shortname:"Snam",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"TRN.MI",shortname:"Terna",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"A2A.MI",shortname:"A2A",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"HER.MI",shortname:"Hera",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"CPR.MI",shortname:"Campari",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"NEXI.MI",shortname:"Nexi",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"FBK.MI",shortname:"FinecoBank",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"AMP.MI",shortname:"Amplifon",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"AZM.MI",shortname:"Azimut",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"POSTE.MI",shortname:"Poste Italiane",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"SPM.MI",shortname:"Saipem",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"STS.MI",shortname:"STMicroelectronics",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"INWT.MI",shortname:"Inwit",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"PIRC.MI",shortname:"Pirelli",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"IVECO.MI",shortname:"Iveco Group",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"MFEA.MI",shortname:"MFE-MediaForEurope",exchDisp:"MIL",quoteType:"EQUITY"}},
-    {{symbol:"REC.MI",shortname:"Recordati",exchDisp:"MIL",quoteType:"EQUITY"}},
-    // ── Francesi (Euronext Paris) ──
-    {{symbol:"MC.PA",shortname:"LVMH",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"OR.PA",shortname:"L'Oreal",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"TTE.PA",shortname:"TotalEnergies",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"BNP.PA",shortname:"BNP Paribas",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"AI.PA",shortname:"Air Liquide",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"SAN.PA",shortname:"Sanofi",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"SAF.PA",shortname:"Safran",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"SU.PA",shortname:"Schneider Electric",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"GLE.PA",shortname:"Societe Generale",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"CS.PA",shortname:"AXA",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"RMS.PA",shortname:"Hermes",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"KER.PA",shortname:"Kering",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"DG.PA",shortname:"Vinci",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"CAP.PA",shortname:"Capgemini",exchDisp:"EPA",quoteType:"EQUITY"}},
-    {{symbol:"DSY.PA",shortname:"Dassault Systemes",exchDisp:"EPA",quoteType:"EQUITY"}},
-    // ── Tedeschi (Xetra) ──
-    {{symbol:"SAP.DE",shortname:"SAP",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"SIE.DE",shortname:"Siemens",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"ALV.DE",shortname:"Allianz",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"MUV2.DE",shortname:"Munich Re",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"BAS.DE",shortname:"BASF",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"BMW.DE",shortname:"BMW",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"VOW3.DE",shortname:"Volkswagen",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"DBK.DE",shortname:"Deutsche Bank",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"MBG.DE",shortname:"Mercedes-Benz",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"BAYN.DE",shortname:"Bayer",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"ADS.DE",shortname:"Adidas",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    {{symbol:"RHM.DE",shortname:"Rheinmetall",exchDisp:"XETRA",quoteType:"EQUITY"}},
-    // ── USA ──
-    {{symbol:"AAPL",shortname:"Apple",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"MSFT",shortname:"Microsoft",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"GOOGL",shortname:"Alphabet (Google)",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"AMZN",shortname:"Amazon",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"META",shortname:"Meta Platforms",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"NVDA",shortname:"NVIDIA",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"TSLA",shortname:"Tesla",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"JPM",shortname:"JPMorgan Chase",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"V",shortname:"Visa",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"JNJ",shortname:"Johnson & Johnson",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"WMT",shortname:"Walmart",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"PG",shortname:"Procter & Gamble",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"BAC",shortname:"Bank of America",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"MA",shortname:"Mastercard",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"XOM",shortname:"Exxon Mobil",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"KO",shortname:"Coca-Cola",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"LLY",shortname:"Eli Lilly",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"AVGO",shortname:"Broadcom",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"COST",shortname:"Costco",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"NFLX",shortname:"Netflix",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"PANW",shortname:"Palo Alto Networks",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"CRM",shortname:"Salesforce",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"AMD",shortname:"AMD",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"INTC",shortname:"Intel",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"QCOM",shortname:"Qualcomm",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"GS",shortname:"Goldman Sachs",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"MS",shortname:"Morgan Stanley",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"CVX",shortname:"Chevron",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"LMT",shortname:"Lockheed Martin",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"RTX",shortname:"RTX (Raytheon)",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"BA",shortname:"Boeing",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"GE",shortname:"GE Aerospace",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"CAT",shortname:"Caterpillar",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"HON",shortname:"Honeywell",exchDisp:"NASDAQ",quoteType:"EQUITY"}},
-    {{symbol:"DIS",shortname:"Disney",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    {{symbol:"NKE",shortname:"Nike",exchDisp:"NYSE",quoteType:"EQUITY"}},
-    // ── ETF ──
-    {{symbol:"VWCE.DE",shortname:"Vanguard FTSE All-World",exchDisp:"XETRA",quoteType:"ETF"}},
-    {{symbol:"IWDA.AS",shortname:"iShares MSCI World",exchDisp:"AMS",quoteType:"ETF"}},
-    {{symbol:"SWDA.MI",shortname:"iShares Core MSCI World",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"CSPX.MI",shortname:"iShares Core S&P 500",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"EIMI.MI",shortname:"iShares MSCI EM IMI",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"VEUR.AS",shortname:"Vanguard FTSE Developed Europe",exchDisp:"AMS",quoteType:"ETF"}},
-    {{symbol:"XWLD.MI",shortname:"Xtrackers MSCI World Swap",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"EXSA.DE",shortname:"iShares Euro Stoxx 50",exchDisp:"XETRA",quoteType:"ETF"}},
-    {{symbol:"AGGH.MI",shortname:"iShares Core Global Aggregate Bond",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"SGLD.MI",shortname:"Invesco Physical Gold ETC",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"PHAU.MI",shortname:"WisdomTree Physical Gold",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"GLD",shortname:"SPDR Gold Shares",exchDisp:"NYSE",quoteType:"ETF"}},
-    {{symbol:"SPY",shortname:"SPDR S&P 500 ETF",exchDisp:"NYSE",quoteType:"ETF"}},
-    {{symbol:"QQQ",shortname:"Invesco QQQ Trust",exchDisp:"NASDAQ",quoteType:"ETF"}},
-    {{symbol:"VTI",shortname:"Vanguard Total Stock Market",exchDisp:"NYSE",quoteType:"ETF"}},
-    {{symbol:"XAR.MI",shortname:"SPDR S&P Aerospace & Defense",exchDisp:"MIL",quoteType:"ETF"}},
-    {{symbol:"L8I7.DE",shortname:"iShares Global Clean Energy",exchDisp:"XETRA",quoteType:"ETF"}},
-    {{symbol:"IQQH.DE",shortname:"iShares Global Water",exchDisp:"XETRA",quoteType:"ETF"}},
-    {{symbol:"QDVE.DE",shortname:"iShares S&P 500 IT Sector",exchDisp:"XETRA",quoteType:"ETF"}}
-  ];
-
-  function guessType(quote) {{
-    var qt = (quote.quoteType || "").toUpperCase();
-    if (qt === "ETF" || qt === "MUTUALFUND") return "ETF";
-    return "Azione";
-  }}
-
-  // Mappa exchange TradingView → suffisso Yahoo Finance
-  var TV_SUFFIX = {{
-    "BVME":".MI","MIL":".MI","XMIL":".MI",
-    "XPAR":".PA","EPA":".PA",
-    "XETR":".DE","XETRA":".DE","FWB":".F",
-    "XAMS":".AS","AMS":".AS",
-    "LSE":".L","XLON":".L",
-    "XSTO":".ST","STO":".ST",
-    "XHEL":".HE","HEL":".HE",
-    "XCOP":".CO","CPH":".CO",
-    "XOSL":".OL","OSL":".OL",
-    "XSWX":".SW","SWX":".SW",
-    "XMAD":".MC","MCE":".MC",
-    "XLIS":".LS","LIS":".LS",
-    "XBRU":".BR","BRU":".BR",
-    "XWAR":".WA","WSE":".WA",
-    "XASX":".AX","ASX":".AX",
-    "XTSE":".T","TSE":".T",
-    "HKEX":".HK","HKG":".HK",
-    "XTSX":".TO","TSX":".TO",
-    "JSE":".JO"
-  }};
-
-  function tvToYahoo(symbol, exchange) {{
-    var us = ["NYSE","NASDAQ","AMEX","CBOE","BATS","ARCA"];
-    for (var i = 0; i < us.length; i++) {{ if (exchange === us[i]) return symbol; }}
-    var sfx = TV_SUFFIX[exchange];
-    return sfx ? symbol + sfx : symbol;
-  }}
-
-  function searchLocal(q) {{
-    var ql = q.toLowerCase();
-    return STATIC_STOCKS.filter(function(s) {{
-      return s.symbol.toLowerCase().indexOf(ql) >= 0 ||
-             s.shortname.toLowerCase().indexOf(ql) >= 0;
-    }}).slice(0, 8);
-  }}
-
-  var _searchResults = [];
-  var _searchTimer = null;
-  function onSearchInput() {{
-    clearTimeout(_searchTimer);
-    var q = document.getElementById("stock-search").value.trim();
-    if (!q) {{ hideDropdown(); return; }}
-    _searchTimer = setTimeout(function() {{ doSearch(q); }}, 300);
-  }}
-
-  async function doSearch(q) {{
-    document.getElementById("manual-add").style.display = "none";
-    var local = searchLocal(q);
-    if (local.length > 0) {{
-      showDropdown(local);
-      document.getElementById("search-status").textContent = "🔍 Espandendo ricerca...";
-    }} else {{
-      document.getElementById("search-status").textContent = "🔍 Ricerca in corso...";
-    }}
-    // 1) TradingView (ampia copertura, incluse small/mid cap)
-    try {{
-      var tv = await searchTradingView(q);
-      if (tv.length > 0) {{
-        var seen = {{}};
-        var merged = local.concat(tv).filter(function(s) {{
-          if (seen[s.symbol]) return false;
-          seen[s.symbol] = true; return true;
-        }}).slice(0, 12);
-        showDropdown(merged);
-        document.getElementById("search-status").textContent = "";
-        return;
-      }}
-    }} catch(e) {{}}
-    // 2) Yahoo Finance via proxy
-    try {{
-      var yf = await searchYahoo(q);
-      if (yf.length > 0) {{
-        showDropdown(yf);
-        document.getElementById("search-status").textContent = "";
-        return;
-      }}
-    }} catch(e) {{}}
-    // 3) Solo lista locale o nessun risultato
-    if (local.length > 0) {{
-      showDropdown(local);
-      document.getElementById("search-status").textContent = "";
-    }} else {{
-      hideDropdown();
-      document.getElementById("search-status").textContent = "Nessun risultato. Aggiungi il ticker manualmente.";
-      document.getElementById("manual-add").style.display = "inline-block";
-    }}
-  }}
-
-  async function fetchJSON(url, timeoutMs) {{
-    var r = await Promise.race([
-      fetch(url),
-      new Promise(function(_, rej) {{ setTimeout(function(){{ rej(new Error("timeout")); }}, timeoutMs || 5000); }})
-    ]);
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.json();
-  }}
-
-  async function searchTradingView(q) {{
-    var enc = encodeURIComponent(q);
-    // Endpoint TV — senza sort_by_country per risultati globali
-    var tvUrl = "https://symbol-search.tradingview.com/symbol_search/v3/?text=" +
-                enc + "&hl=1&exchange=&lang=en&search_type=undefined&domain=production";
-    var tvUrlOld = "https://symbol-search.tradingview.com/symbol_search/?text=" +
-                   enc + "&exchange=&lang=en&type=&domain=production";
-
-    // Tentativi: diretto, proxy corsproxy, proxy allorigins (raw)
-    var attempts = [
-      tvUrl,
-      "https://corsproxy.io/?" + encodeURIComponent(tvUrl),
-      "https://api.allorigins.win/raw?url=" + encodeURIComponent(tvUrl),
-      tvUrlOld,
-      "https://corsproxy.io/?" + encodeURIComponent(tvUrlOld)
-    ];
-
-    function parseTV(data) {{
-      // allorigins/get wrap
-      if (data && data.contents) {{ try {{ data = JSON.parse(data.contents); }} catch(e) {{}} }}
-      var symbols = data && data.symbols ? data.symbols : (Array.isArray(data) ? data : []);
-      return symbols.slice(0, 15).map(function(s) {{
-        var exch = s.exchange || s.listed_exchange || "";
-        var ticker = s.symbol || "";
-        var tvSym = (exch && ticker) ? exch + ":" + ticker : ticker;
-        var tp = (s.type === "fund" || s.type === "dr" || s.type === "structured") ? "ETF" : "Azione";
-        return {{symbol: tvSym, shortname: s.description || s.symbol, exchDisp: exch,
-                 quoteType: tp === "ETF" ? "ETF" : "EQUITY"}};
-      }}).filter(function(s) {{ return s.symbol && s.symbol.length > 0; }});
-    }}
-
-    for (var i = 0; i < attempts.length; i++) {{
-      try {{
-        var data = await fetchJSON(attempts[i], 5000);
-        var results = parseTV(data);
-        if (results.length > 0) return results;
-      }} catch(e) {{ /* continua */ }}
-    }}
-    return [];
-  }}
-
-  async function searchYahoo(q) {{
-    var yf = "https://query1.finance.yahoo.com/v1/finance/search?q=" +
-             encodeURIComponent(q) + "&lang=en-US&region=US&quotesCount=10&newsCount=0";
-    var proxies = [
-      {{url: "https://api.allorigins.win/raw?url=" + encodeURIComponent(yf), wrap: false}},
-      {{url: "https://corsproxy.io/?" + encodeURIComponent(yf), wrap: false}},
-      {{url: "https://api.allorigins.win/get?url=" + encodeURIComponent(yf), wrap: true}}
-    ];
-    for (var i = 0; i < proxies.length; i++) {{
-      try {{
-        var p = proxies[i];
-        var data = await fetchJSON(p.url, 5000);
-        if (p.wrap && data.contents) data = JSON.parse(data.contents);
-        var quotes = (data.finance && data.finance.result &&
-                      data.finance.result[0] && data.finance.result[0].quotes) || [];
-        if (quotes.length) return quotes;
-      }} catch(e) {{ continue; }}
-    }}
-    return [];
-  }}
-
-  function showDropdown(results) {{
-    _searchResults = results.slice(0, 10);
-    var dd = document.getElementById("search-dropdown");
-    dd.innerHTML = _searchResults.map(function(q, idx) {{
-      var sym = q.symbol || "";
-      var nm  = q.shortname || q.longname || sym;
-      var ex  = q.exchDisp || q.exchange || "";
-      var tp  = guessType(q);
-      return '<div class="dd-item" onmousedown="addFromSearch(' + idx + ')">' +
-        '<span style="font-weight:600;font-family:monospace;color:#1e3a5f;min-width:70px">' + sym + '</span>' +
-        '<span style="flex:1;font-size:13px;color:#333;overflow:hidden;text-overflow:ellipsis">' + nm + '</span>' +
-        '<span style="font-size:11px;color:#888;white-space:nowrap">' + ex + ' &middot; ' + tp + '</span>' +
-        '</div>';
-    }}).join("");
-    dd.style.display = "block";
-  }}
-
-  function hideDropdown() {{
-    var dd = document.getElementById("search-dropdown");
-    if (dd) dd.style.display = "none";
-  }}
-
-  function addFromSearch(idx) {{
-    var item = _searchResults[idx];
-    if (!item) return;
-    var rawSym = (item.symbol || "").toUpperCase();
-    var exch   = (item.exchDisp || "").toUpperCase();
-    // Se il simbolo è in formato Yahoo (es. ENI.MI), converti in formato TV (MIL:ENI)
-    var symbol;
-    if (rawSym.indexOf(".") >= 0 && exch) {{
-      symbol = exch + ":" + rawSym.split(".")[0];
-    }} else {{
-      symbol = rawSym;
-    }}
-    var name   = item.shortname || item.longname || symbol;
-    var type   = guessType(item);
-    hideDropdown();
-    document.getElementById("stock-search").value = "";
-    document.getElementById("search-status").textContent = "";
-    document.getElementById("manual-add").style.display = "none";
-    if (editorPortfolio.some(function(p) {{ return p.symbol === symbol; }})) {{
-      setStatus("⚠️ " + symbol + " già presente nel portafoglio", "#d97706", 3000);
-      return;
-    }}
-    editorPortfolio.push({{symbol: symbol, name: name, type: type}});
-    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
-    renderEditorTable();
-    setStatus("✅ " + symbol + " aggiunto", "#16a34a", 3000);
-  }}
-
-  function addManualTicker() {{
-    var sym = document.getElementById("stock-search").value.trim().toUpperCase();
-    if (!sym) {{ setStatus("⚠️ Inserisci un ticker", "#d97706", 3000); return; }}
-    if (editorPortfolio.some(function(p) {{ return p.symbol === sym; }})) {{
-      setStatus("⚠️ " + sym + " già presente nel portafoglio", "#d97706", 3000);
-      return;
-    }}
-    editorPortfolio.push({{symbol: sym, name: sym, type: "Azione"}});
-    localStorage.setItem("editor_portfolio", JSON.stringify(editorPortfolio));
-    renderEditorTable();
-    document.getElementById("stock-search").value = "";
-    document.getElementById("manual-add").style.display = "none";
-    document.getElementById("search-status").textContent = "";
-    setStatus("✅ " + sym + " aggiunto", "#16a34a", 3000);
-  }}
 
   function showGhConfig() {{
     document.getElementById("gh-config").style.display = "block";
@@ -2014,12 +1602,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     setStatus("✅ Impostazioni salvate", "#16a34a", 3000);
   }}
 
-  function setStatus(msg, color, timeout) {{
-    const el = document.getElementById("editor-status");
-    el.textContent = msg; el.style.color = color;
-    if (timeout) setTimeout(() => {{ el.textContent = ""; }}, timeout);
-  }}
-
   async function dispatchWorkflow(inputs) {{
     const owner = localStorage.getItem("gh_owner");
     const repo  = localStorage.getItem("gh_repo");
@@ -2036,24 +1618,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (wfR.status !== 204) {{
       const err = await wfR.text();
       throw new Error(`HTTP ${{wfR.status}}: ${{err}}`);
-    }}
-  }}
-
-  async function triggerReport(btn) {{
-    const valid = editorPortfolio.filter(p => p.symbol.trim() && p.name.trim());
-    if (!valid.length) {{ setStatus("⚠️ Aggiungi almeno un titolo valido", "#d97706"); return; }}
-    btn.disabled = true;
-    try {{
-      setStatus("⏳ Avvio generazione report...", "#d97706");
-      await dispatchWorkflow({{portfolio_json: JSON.stringify(valid)}});
-      localStorage.setItem("editor_portfolio", JSON.stringify(valid));
-      editorPortfolio = valid;
-      renderEditorTable();
-      setStatus("✅ Report avviato! Pronto in ~3-5 minuti. Premi F5 per aggiornare la pagina.", "#16a34a");
-    }} catch(e) {{
-      setStatus(`❌ ${{e.message}}`, "#dc2626");
-    }} finally {{
-      btn.disabled = false;
     }}
   }}
 
@@ -2079,40 +1643,69 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     }}
   }}
 
-  async function salvaIsinMap(btn) {{
-    const testo = document.getElementById("isin-map-text").value.trim();
-    if (!testo) {{ setSyncStatus("⚠️ Scrivi la mappa ISIN prima di salvare", "#d97706"); return; }}
-    try {{ JSON.parse(testo); }} catch(e) {{ setSyncStatus("❌ JSON non valido: " + e.message, "#dc2626"); return; }}
-    btn.disabled = true;
-    try {{
-      setSyncStatus("⏳ Salvataggio mappa ISIN...", "#d97706");
-      await dispatchWorkflow({{isin_map_json: testo}});
-      setSyncStatus("✅ Mappa salvata! Report pronto in ~3-5 minuti.", "#16a34a");
-    }} catch(e) {{
-      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
-    }} finally {{
-      btn.disabled = false;
-    }}
-  }}
-
-  async function salvaRegole(btn) {{
-    const testo = document.getElementById("regole-text").value.trim();
-    if (!testo) {{ setSyncStatus("⚠️ Scrivi le regole prima di salvare", "#d97706"); return; }}
-    btn.disabled = true;
-    try {{
-      setSyncStatus("⏳ Salvataggio regole...", "#d97706");
-      await dispatchWorkflow({{regole_posizioni_yaml: testo}});
-      setSyncStatus("✅ Regole salvate! Report pronto in ~3-5 minuti.", "#16a34a");
-    }} catch(e) {{
-      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
-    }} finally {{
-      btn.disabled = false;
-    }}
-  }}
-
   function setSyncStatus(msg, color) {{
     const el = document.getElementById("sync-status");
     if (el) {{ el.textContent = msg; el.style.color = color; }}
+  }}
+
+  function escHtml(s) {{
+    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }}
+
+  function initSync() {{
+    renderRegoleTable();
+  }}
+
+  function renderRegoleTable() {{
+    const tbody = document.getElementById("regole-tbody");
+    if (!tbody) return;
+    if (!REGOLE_ATTUALI.length) {{
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:16px">Nessuna posizione con ISIN — carica prima il dossier XLS qui sopra.</td></tr>';
+      return;
+    }}
+    tbody.innerHTML = REGOLE_ATTUALI.map((r, i) => `
+      <tr>
+        <td style="padding:8px 6px"><strong>${{escHtml(r.name)}}</strong><br><span style="font-size:11px;color:#999">${{escHtml(r.isin)}}</span></td>
+        <td style="padding:8px 6px"><input id="sym-${{i}}" value="${{escHtml(r.symbol)}}" placeholder="MIL:TICKER" style="width:110px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
+        <td style="padding:8px 6px"><input id="stop-${{i}}" type="number" step="0.01" value="${{r.stop ?? ""}}" style="width:85px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
+        <td style="padding:8px 6px"><input id="target-${{i}}" type="number" step="0.01" value="${{r.target ?? ""}}" style="width:85px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
+        <td style="padding:8px 6px"><input id="rev-${{i}}" type="date" value="${{r.revisione || ""}}" style="padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
+        <td style="padding:8px 6px"><input id="tesi-${{i}}" value="${{escHtml(r.tesi)}}" placeholder="perché tieni questa posizione" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
+      </tr>
+    `).join("");
+  }}
+
+  async function salvaRegolePosizioni(btn) {{
+    const isinMap = {{}};
+    const regole = {{}};
+    let mancaSimbolo = false;
+    REGOLE_ATTUALI.forEach((r, i) => {{
+      const symbol = (document.getElementById("sym-" + i).value || "").trim();
+      const stopV   = (document.getElementById("stop-" + i).value || "").trim();
+      const targetV = (document.getElementById("target-" + i).value || "").trim();
+      const tesiV   = (document.getElementById("tesi-" + i).value || "").trim();
+      const revV    = (document.getElementById("rev-" + i).value || "").trim();
+      if (!symbol) {{ mancaSimbolo = true; return; }}
+      isinMap[r.isin] = {{tv_symbol: symbol, name: r.name, type: r.type || "Azione"}};
+      const regola = {{}};
+      if (stopV)   regola.stop = parseFloat(stopV);
+      if (targetV) regola.target = parseFloat(targetV);
+      if (tesiV)   regola.tesi = tesiV;
+      if (revV)    regola.revisione = revV;
+      if (r.eventi && r.eventi.length) regola.eventi = r.eventi;
+      regole[r.isin] = regola;
+    }});
+    if (mancaSimbolo) {{ setSyncStatus("⚠️ Ogni riga deve avere un ticker TradingView", "#d97706"); return; }}
+    btn.disabled = true;
+    try {{
+      setSyncStatus("⏳ Salvataggio regole...", "#d97706");
+      await dispatchWorkflow({{isin_map_json: JSON.stringify(isinMap), regole_posizioni_yaml: JSON.stringify(regole)}});
+      setSyncStatus("✅ Regole salvate! Report pronto in ~3-5 minuti. Premi F5 per aggiornare.", "#16a34a");
+    }} catch(e) {{
+      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
+    }} finally {{
+      btn.disabled = false;
+    }}
   }}
 </script>
 """ if password_hash else ""
@@ -2259,11 +1852,11 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     </table>
   </div>
 
-  <!-- AGGIORNA PORTAFOGLIO -->
+  <!-- SINCRONIZZA DATI PERSONALI -->
   <div class="section">
-    <h2>🔧 Aggiorna Portafoglio</h2>
+    <h2>📂 Sincronizza dati personali</h2>
     <div id="gh-config" style="background:#f0f4f8;border-radius:8px;padding:16px;margin-bottom:16px">
-      <p style="font-size:13px;color:#555;margin-bottom:12px">Inserisci una volta le credenziali GitHub — vengono salvate nel browser.</p>
+      <p style="font-size:13px;color:#555;margin-bottom:12px">Inserisci una volta le credenziali GitHub — vengono salvate nel browser, non sul server.</p>
       <div class="gh-grid">
         <div>
           <label style="font-size:12px;color:#666;display:block;margin-bottom:4px">GitHub Username</label>
@@ -2286,73 +1879,13 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
         Salva impostazioni
       </button>
     </div>
-    <div id="gh-config-saved" style="display:none;font-size:13px;color:#555;margin-bottom:12px">
+    <div id="gh-config-saved" style="display:none;font-size:13px;color:#555;margin-bottom:16px">
       Impostazioni GitHub caricate. <a href="#" onclick="showGhConfig();return false" style="color:#1e3a5f">Modifica</a>
     </div>
 
-    <!-- Tabella portafoglio con checkbox -->
-    <table style="width:100%;border-collapse:collapse;margin-bottom:8px">
-      <thead>
-        <tr style="background:#1e3a5f;color:white">
-          <th style="padding:10px 6px;width:36px;text-align:center">
-            <input type="checkbox" id="check-all" onchange="toggleAll(this)" style="width:16px;height:16px;cursor:pointer">
-          </th>
-          <th style="padding:10px;text-align:left;font-size:12px">Simbolo</th>
-          <th style="padding:10px;text-align:left;font-size:12px">Nome</th>
-          <th style="padding:10px;text-align:left;font-size:12px">Tipo</th>
-          <th style="padding:10px;width:36px"></th>
-        </tr>
-      </thead>
-      <tbody id="editor-tbody"></tbody>
-    </table>
-    <div style="margin-bottom:16px">
-      <button onclick="deleteSelected()"
-        style="background:#dc2626;color:white;border:none;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600">
-        🗑 Elimina selezionati
-      </button>
-    </div>
-
-    <!-- Ricerca e aggiunta titoli -->
-    <div style="margin-bottom:16px">
-      <label style="font-size:12px;color:#666;display:block;margin-bottom:6px;font-weight:600">Aggiungi titolo</label>
-      <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap">
-        <div style="position:relative;flex:1;min-width:220px">
-          <input id="stock-search" type="text"
-            placeholder="Cerca per nome o ticker (es. ENI, Apple, VWCE)..."
-            oninput="onSearchInput()" onblur="setTimeout(hideDropdown,200)"
-            style="width:100%;padding:9px 12px;border:1px solid #ddd;border-radius:6px;font-size:14px">
-          <div id="search-dropdown"
-            style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:1px solid #ddd;border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);z-index:100;max-height:300px;overflow-y:auto;margin-top:2px">
-          </div>
-        </div>
-        <div id="manual-add" style="display:none">
-          <button onclick="addManualTicker()"
-            style="background:#1e3a5f;color:white;border:none;padding:9px 14px;border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap">
-            ➕ Aggiungi come ticker
-          </button>
-        </div>
-      </div>
-      <div id="search-status" style="font-size:12px;color:#888;margin-top:6px"></div>
-    </div>
-
-    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-      <button onclick="triggerReport(this)"
-        style="background:#16a34a;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
-        🚀 Aggiorna Report
-      </button>
-      <span id="editor-status" style="font-size:13px"></span>
-    </div>
-    <p style="font-size:11px;color:#999;margin-top:10px">Il portafoglio aggiornato viene usato subito e salvato come secret GitHub dal workflow — non è visibile nel repository.</p>
-  </div>
-
-  <!-- SINCRONIZZA DATI PERSONALI -->
-  <div class="section">
-    <h2>📂 Sincronizza dati personali</h2>
-    <p style="font-size:13px;color:#555;margin-bottom:20px">Usa le stesse credenziali GitHub di "Aggiorna Portafoglio" qui sopra. Ogni salvataggio aggiorna il secret corrispondente e avvia subito un nuovo report — nessun file finisce nel repository, nessun secret da impostare a mano su GitHub.</p>
-
     <div style="margin-bottom:24px">
       <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Dossier titoli (XLS)</label>
-      <p style="font-size:12px;color:#666;margin-bottom:8px">Il file "Movimenti Dossier Titoli" esportato dal tuo broker. Ricostruisce le posizioni aperte in FIFO automaticamente ogni volta che lo ricarichi.</p>
+      <p style="font-size:12px;color:#666;margin-bottom:8px">Carica il file "Movimenti Dossier Titoli" esportato dal tuo broker (formato .xlsx). Ricostruisce le posizioni aperte automaticamente, ogni volta che lo ricarichi.</p>
       <input id="xls-file" type="file" accept=".xlsx" style="margin-bottom:8px;display:block;font-size:13px">
       <button onclick="caricaDossier(this)"
         style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
@@ -2360,25 +1893,27 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       </button>
     </div>
 
-    <div style="margin-bottom:24px">
-      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Mappa ISIN → TradingView</label>
-      <p style="font-size:12px;color:#666;margin-bottom:8px">Una voce per ISIN — serve una sola volta per titolo, non a ogni caricamento del dossier.</p>
-      <textarea id="isin-map-text" rows="4" placeholder='{{&quot;IT0003132476&quot;: {{&quot;tv_symbol&quot;: &quot;MIL:ENI&quot;, &quot;name&quot;: &quot;Eni&quot;, &quot;type&quot;: &quot;Azione&quot;}}}}'
-        style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace;margin-bottom:8px"></textarea>
-      <button onclick="salvaIsinMap(this)"
-        style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
-        Salva mappa
-      </button>
-    </div>
-
     <div>
-      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Regole di posizione (stop / target / tesi)</label>
-      <p style="font-size:12px;color:#666;margin-bottom:8px">Una voce per ISIN, formato YAML. Sostituisce tutte le regole scritte finora — ricopia anche quelle che non cambiano.</p>
-      <textarea id="regole-text" rows="6" placeholder="IT0003132476:&#10;  stop: 12.50&#10;  target: 16.00&#10;  tesi: &quot;...&quot;"
-        style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:12px;font-family:monospace;margin-bottom:8px"></textarea>
-      <button onclick="salvaRegole(this)"
-        style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
-        Salva regole
+      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Regole di posizione</label>
+      <p style="font-size:12px;color:#666;margin-bottom:8px">Una riga per ogni posizione aperta trovata nel dossier — compilata da sola dopo il caricamento. Le posizioni già configurate mostrano i valori salvati; le nuove sono vuote. Il ticker TradingView è obbligatorio, serve a recuperare prezzo/RSI/EMA; il resto è facoltativo.</p>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
+          <thead>
+            <tr style="background:#1e3a5f;color:white">
+              <th style="padding:8px 6px;text-align:left;font-size:12px">Titolo</th>
+              <th style="padding:8px 6px;text-align:left;font-size:12px">Ticker TradingView</th>
+              <th style="padding:8px 6px;text-align:left;font-size:12px">Stop</th>
+              <th style="padding:8px 6px;text-align:left;font-size:12px">Target</th>
+              <th style="padding:8px 6px;text-align:left;font-size:12px">Revisione</th>
+              <th style="padding:8px 6px;text-align:left;font-size:12px">Tesi</th>
+            </tr>
+          </thead>
+          <tbody id="regole-tbody"></tbody>
+        </table>
+      </div>
+      <button onclick="salvaRegolePosizioni(this)"
+        style="background:#16a34a;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
+        🚀 Salva regole e aggiorna report
       </button>
     </div>
 
@@ -2450,12 +1985,25 @@ def main():
     logger.info("Building HTML...")
     pwd = os.environ.get("SITE_PASSWORD", "")
     pwd_hash = hashlib.sha256(pwd.encode()).hexdigest() if pwd else ""
-    portfolio_base = json.dumps([
-        {"symbol": p["symbol"], "name": p.get("name", p["symbol"]), "type": p.get("type", "Azione")}
-        for p in PORTFOLIO
-    ], ensure_ascii=False)
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash, portfolio_base,
-                       regole_map, calendario, segnali_items)
+    regole_editor_data = []
+    for p in portfolio:
+        isin = p.get("isin")
+        if not isin:
+            continue
+        regola = regole_map.get(isin) or {}
+        regole_editor_data.append({
+            "isin": isin,
+            "symbol": p.get("yf_symbol", p.get("symbol", "")),
+            "name": p.get("name", p.get("symbol", "")),
+            "type": p.get("type", "Azione"),
+            "stop": regola.get("stop"),
+            "target": regola.get("target"),
+            "tesi": regola.get("tesi") or "",
+            "revisione": regola["revisione"].isoformat() if regola.get("revisione") else None,
+            "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat()} for e in regola.get("eventi", [])],
+        })
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash,
+                       regole_map, calendario, segnali_items, regole_editor_data)
 
     os.makedirs("docs", exist_ok=True)
     with open("docs/index.html", "w", encoding="utf-8") as f:

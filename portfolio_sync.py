@@ -104,18 +104,33 @@ def read_movimenti(path=None):
 
     if MOVIMENTI_XLSX_B64:
         try:
-            sorgente = io.BytesIO(base64.b64decode(MOVIMENTI_XLSX_B64))
-            logger.info("Dossier movimenti letto dal secret MOVIMENTI_XLSX_B64")
+            dati = base64.b64decode(MOVIMENTI_XLSX_B64)
         except Exception as e:
             logger.error(f"MOVIMENTI_XLSX_B64 illeggibile ({e})")
             return []
+        if not dati.startswith(b"PK"):
+            # Un .xlsx e' uno ZIP (firma "PK"): questo non lo e', quindi
+            # openpyxl fallirebbe comunque. Niente traceback che fa fallire
+            # tutto il workflow: solo un log chiaro, report senza portafoglio.
+            logger.error(
+                f"MOVIMENTI_XLSX_B64 non è un file .xlsx valido ({len(dati)} byte, "
+                "non inizia con la firma ZIP). Se il tuo broker esporta in .xls "
+                "(vecchio formato Excel), aprilo e salvalo come .xlsx prima di caricarlo."
+            )
+            return []
+        sorgente = io.BytesIO(dati)
+        logger.info(f"Dossier movimenti letto dal secret MOVIMENTI_XLSX_B64 ({len(dati)} byte)")
     elif os.path.exists(path):
         sorgente = path
     else:
         logger.warning(f"Dossier movimenti non trovato: né secret MOVIMENTI_XLSX_B64 né {path}")
         return []
 
-    wb = load_workbook(sorgente, data_only=True, read_only=True)
+    try:
+        wb = load_workbook(sorgente, data_only=True, read_only=True)
+    except Exception as e:
+        logger.error(f"Dossier XLS illeggibile ({e}). Verifica che sia un file .xlsx valido.")
+        return []
     ws = wb.active
     rows = ws.iter_rows(values_only=True)
     header = next(rows, None)
