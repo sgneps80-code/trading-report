@@ -28,9 +28,13 @@ impostato `MOVIMENTI_XLSX_B64`: stesso principio, mai un file committato.
 ## Sincronizzazione posizioni (conto B)
 
 Le posizioni aperte non si aggiornano più a mano. Il modo più semplice è
-dalla pagina del report stesso ("📂 Sincronizza dati personali": carica il
-file, compila ticker/stop/target/tesi nella tabella che appare, salva) —
-i punti sotto spiegano cosa succede dietro le quinte.
+dalla pagina del report stesso: carica il file in "📂 Sincronizza dati
+personali" (in fondo alla pagina), poi torna su a "Le mie posizioni" — lì,
+riga per riga, compaiono già i campi ticker/stop/target/revisione/tesi da
+compilare (prefissati se la posizione era già configurata, vuoti se è
+nuova) e il bottone "💾 Salva regole e aggiorna report" subito sotto la
+tabella: un'unica area, senza dover scendere a un'altra tabella per
+salvare. I punti sotto spiegano cosa succede dietro le quinte.
 
 **Due formati di export sono riconosciuti automaticamente**, in .xlsx o
 .xls (vecchio formato Excel binario — capita spesso con i broker italiani,

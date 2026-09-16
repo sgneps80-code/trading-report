@@ -6,7 +6,7 @@ Analisi:   RSI + MACD + Trend EMA + Raccomandazione TV aggregata (26 indicatori)
 AI:        Anthropic Claude Haiku
 """
 
-import os, json, hashlib, logging
+import os, json, hashlib, html, logging
 from datetime import datetime, date, timedelta, timezone
 import requests
 import anthropic
@@ -1376,9 +1376,10 @@ def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
         return '<span style="color:#999;font-size:12px">—</span>'
     return "<br>".join(righe)
 
-def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None):
+def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None, editor_idx_by_isin=None):
     cambiamenti_map = cambiamenti_map or {}
     contraddizioni_map = contraddizioni_map or {}
+    editor_idx_by_isin = editor_idx_by_isin or {}
     if not portfolio:
         return ('<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">'
                 'Nessuna posizione aperta sul conto B (dossier non ancora caricato, vedi README).</td></tr>')
@@ -1386,6 +1387,7 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
     for p in portfolio:
         isin = p.get("isin")
         regola = regole_map.get(isin) or {}
+        idx = editor_idx_by_isin.get(isin)
         sym_key = p.get("yf_symbol", p.get("symbol", ""))
         bare_key = sym_key.split(":")[-1] if ":" in sym_key else sym_key
         cambiamento = (cambiamenti_map.get(sym_key) or cambiamenti_map.get(bare_key) or {}).get("descrizione")
@@ -1415,19 +1417,40 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
         price_str = f"{price:.2f}" if price else "n.d."
         divisa = p.get("divisa") or ""
         tesi = regola.get("tesi") or ""
-        tesi_html = tesi if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
+        nome = p.get("name", p.get("symbol", ""))
+        simbolo = p.get("yf_symbol", p.get("symbol", ""))
+        revisione = regola.get("revisione")
+
+        mini = "padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px;margin-top:4px"
+        if idx is not None:
+            ticker_input = (f'<br><input id="sym-{idx}" value="{html.escape(simbolo)}" '
+                             f'placeholder="MIL:TICKER" style="width:100px;{mini}">')
+            stop_input = (f'<br><input id="stop-{idx}" type="number" step="0.01" '
+                          f'value="{regola.get("stop") if regola.get("stop") is not None else ""}" '
+                          f'style="width:80px;{mini}">')
+            target_input = (f'<br><input id="target-{idx}" type="number" step="0.01" '
+                            f'value="{regola.get("target") if regola.get("target") is not None else ""}" '
+                            f'style="width:80px;{mini}">')
+            rev_input = (f'<br><input id="rev-{idx}" type="date" title="Prossima revisione" '
+                        f'value="{revisione.isoformat() if revisione else ""}" style="{mini}">')
+            tesi_field = (f'<input id="tesi-{idx}" value="{html.escape(tesi)}" '
+                         f'placeholder="perché tieni questa posizione" style="width:100%;{mini}">')
+        else:
+            ticker_input = stop_input = target_input = rev_input = ""
+            tesi_html = html.escape(tesi) if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
+            tesi_field = f'<div style="color:#444;font-size:12px">{tesi_html}</div>'
 
         rows += f"""<tr>
-            <td><strong>{p.get('name', p.get('symbol',''))}</strong><br><span style="color:#999;font-size:11px">{p.get('yf_symbol', p.get('symbol',''))}</span></td>
+            <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{ticker_input}</td>
             <td>{price_str} {divisa}</td>
             <td>{var_da_carico_html(price, p.get('prezzo_medio'))}</td>
             <td>{giorni_detenzione_html(p.get('giorni_detenzione'))}</td>
-            <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}</td>
-            <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}</td>
+            <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}{stop_input}</td>
+            <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}{target_input}</td>
             <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
-            <td>{eventi_prossimi_html(regola.get('eventi'))}</td>
+            <td>{eventi_prossimi_html(regola.get('eventi'))}{rev_input}</td>
             <td>{note_fattuali_html(p, regola, cambiamento, contraddizione)}</td>
-            <td class="wrap"><div style="color:#444;font-size:12px">{tesi_html}</div></td>
+            <td class="wrap">{tesi_field}</td>
         </tr>"""
     return rows
 
@@ -1520,6 +1543,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     em     = _analysis_map(analysis.get("etfs_analysis", []))
     cm     = _analysis_map(analysis.get("cambiamenti_posizioni", []))
     cx     = _analysis_map(analysis.get("contraddizioni_posizioni", []))
+    editor_idx_by_isin = {r["isin"]: i for i, r in enumerate(regole_editor_data or [])}
 
     # Contesto di mercato per Raccomandazione
     mkt_it = indices.get("FTSE MIB") or 0
@@ -1568,7 +1592,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       document.getElementById("report").style.display = "block";
       localStorage.setItem("tr_auth", h);
       localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
-      initSync();
     }} else {{
       document.getElementById("err").style.display = "block";
     }}
@@ -1580,7 +1603,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (h && exp && Date.now() < +exp && h === HASH) {{
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
-      initSync();
     }}
   }})();
 
@@ -1643,36 +1665,9 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     }}
   }}
 
-  function setSyncStatus(msg, color) {{
-    const el = document.getElementById("sync-status");
+  function setSyncStatus(msg, color, elId) {{
+    const el = document.getElementById(elId || "sync-status");
     if (el) {{ el.textContent = msg; el.style.color = color; }}
-  }}
-
-  function escHtml(s) {{
-    return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-  }}
-
-  function initSync() {{
-    renderRegoleTable();
-  }}
-
-  function renderRegoleTable() {{
-    const tbody = document.getElementById("regole-tbody");
-    if (!tbody) return;
-    if (!REGOLE_ATTUALI.length) {{
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#999;padding:16px">Nessuna posizione con ISIN — carica prima il dossier XLS qui sopra.</td></tr>';
-      return;
-    }}
-    tbody.innerHTML = REGOLE_ATTUALI.map((r, i) => `
-      <tr>
-        <td style="padding:8px 6px"><strong>${{escHtml(r.name)}}</strong><br><span style="font-size:11px;color:#999">${{escHtml(r.isin)}}</span></td>
-        <td style="padding:8px 6px"><input id="sym-${{i}}" value="${{escHtml(r.symbol)}}" placeholder="MIL:TICKER" style="width:110px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
-        <td style="padding:8px 6px"><input id="stop-${{i}}" type="number" step="0.01" value="${{r.stop ?? ""}}" style="width:85px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
-        <td style="padding:8px 6px"><input id="target-${{i}}" type="number" step="0.01" value="${{r.target ?? ""}}" style="width:85px;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
-        <td style="padding:8px 6px"><input id="rev-${{i}}" type="date" value="${{r.revisione || ""}}" style="padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
-        <td style="padding:8px 6px"><input id="tesi-${{i}}" value="${{escHtml(r.tesi)}}" placeholder="perché tieni questa posizione" style="width:100%;padding:6px;border:1px solid #ddd;border-radius:4px;font-size:12px"></td>
-      </tr>
-    `).join("");
   }}
 
   async function salvaRegolePosizioni(btn) {{
@@ -1695,14 +1690,14 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       if (r.eventi && r.eventi.length) regola.eventi = r.eventi;
       regole[r.isin] = regola;
     }});
-    if (mancaSimbolo) {{ setSyncStatus("⚠️ Ogni riga deve avere un ticker TradingView", "#d97706"); return; }}
+    if (mancaSimbolo) {{ setSyncStatus("⚠️ Ogni riga deve avere un ticker TradingView", "#d97706", "regole-status"); return; }}
     btn.disabled = true;
     try {{
-      setSyncStatus("⏳ Salvataggio regole...", "#d97706");
+      setSyncStatus("⏳ Salvataggio regole...", "#d97706", "regole-status");
       await dispatchWorkflow({{isin_map_json: JSON.stringify(isinMap), regole_posizioni_yaml: JSON.stringify(regole)}});
-      setSyncStatus("✅ Regole salvate! Report pronto in ~3-5 minuti. Premi F5 per aggiornare.", "#16a34a");
+      setSyncStatus("✅ Regole salvate! Report pronto in ~3-5 minuti. Premi F5 per aggiornare.", "#16a34a", "regole-status");
     }} catch(e) {{
-      setSyncStatus(`❌ ${{e.message}}`, "#dc2626");
+      setSyncStatus(`❌ ${{e.message}}`, "#dc2626", "regole-status");
     }} finally {{
       btn.disabled = false;
     }}
@@ -1779,15 +1774,23 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   <!-- LE MIE POSIZIONI -->
   <div class="section">
     <h2>Le mie posizioni <span class="badge-count">{len(portfolio)} aperte</span></h2>
+    <p class="empty-note">Ticker TradingView, stop, target, revisione e tesi si modificano qui sotto, riga per riga — nessun'altra tabella da cercare.</p>
+    <div style="overflow-x:auto">
     <table>
       <thead><tr>
         <th>Titolo</th><th>Prezzo</th><th>Var. da carico</th><th>Giorni detenzione</th>
         <th>Distanza da stop</th><th>Distanza da target</th><th>Trend medio periodo</th>
-        <th>Eventi (30gg)</th><th>Da notare</th><th>Tesi scritta</th>
+        <th>Eventi (30gg) / Revisione</th><th>Da notare</th><th>Tesi scritta</th>
       </tr></thead>
-      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx)}</tbody>
+      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx, editor_idx_by_isin)}</tbody>
     </table>
-    <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto in data/regole_posizioni.yaml. La decisione resta tua.</p>
+    </div>
+    <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto qui sopra. La decisione resta tua.</p>
+    {'''<button onclick="salvaRegolePosizioni(this)"
+      style="background:#16a34a;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;margin-top:8px">
+      💾 Salva regole e aggiorna report
+    </button>
+    <p id="regole-status" style="font-size:13px;margin-top:12px"></p>''' if editor_idx_by_isin else ''}
   </div>
 
   <!-- CALENDARIO -->
@@ -1883,37 +1886,13 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       Impostazioni GitHub caricate. <a href="#" onclick="showGhConfig();return false" style="color:#1e3a5f">Modifica</a>
     </div>
 
-    <div style="margin-bottom:24px">
+    <div>
       <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Dossier titoli (XLS)</label>
-      <p style="font-size:12px;color:#666;margin-bottom:8px">Carica il file "Movimenti Dossier Titoli" esportato dal tuo broker (formato .xlsx). Ricostruisce le posizioni aperte automaticamente, ogni volta che lo ricarichi.</p>
-      <input id="xls-file" type="file" accept=".xlsx" style="margin-bottom:8px;display:block;font-size:13px">
+      <p style="font-size:12px;color:#666;margin-bottom:8px">Carica il file "Movimenti Dossier Titoli" o "Portafoglio di sintesi" esportato dal tuo broker (.xlsx o .xls). Ricostruisce le posizioni aperte automaticamente — le righe da compilare (ticker, stop, target, tesi) compaiono in "Le mie posizioni" qui sopra, senza bisogno di scendere fin qui.</p>
+      <input id="xls-file" type="file" accept=".xlsx,.xls" style="margin-bottom:8px;display:block;font-size:13px">
       <button onclick="caricaDossier(this)"
         style="background:#1e3a5f;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
         Carica e sincronizza
-      </button>
-    </div>
-
-    <div>
-      <label style="font-size:13px;font-weight:600;color:#1e3a5f;display:block;margin-bottom:6px">Regole di posizione</label>
-      <p style="font-size:12px;color:#666;margin-bottom:8px">Una riga per ogni posizione aperta trovata nel dossier — compilata da sola dopo il caricamento. Le posizioni già configurate mostrano i valori salvati; le nuove sono vuote. Il ticker TradingView è obbligatorio, serve a recuperare prezzo/RSI/EMA; il resto è facoltativo.</p>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;margin-bottom:12px">
-          <thead>
-            <tr style="background:#1e3a5f;color:white">
-              <th style="padding:8px 6px;text-align:left;font-size:12px">Titolo</th>
-              <th style="padding:8px 6px;text-align:left;font-size:12px">Ticker TradingView</th>
-              <th style="padding:8px 6px;text-align:left;font-size:12px">Stop</th>
-              <th style="padding:8px 6px;text-align:left;font-size:12px">Target</th>
-              <th style="padding:8px 6px;text-align:left;font-size:12px">Revisione</th>
-              <th style="padding:8px 6px;text-align:left;font-size:12px">Tesi</th>
-            </tr>
-          </thead>
-          <tbody id="regole-tbody"></tbody>
-        </table>
-      </div>
-      <button onclick="salvaRegolePosizioni(this)"
-        style="background:#16a34a;color:white;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600">
-        🚀 Salva regole e aggiorna report
       </button>
     </div>
 
