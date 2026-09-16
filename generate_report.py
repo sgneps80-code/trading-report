@@ -50,7 +50,8 @@ TV_COLS = [
     "MACD.signal",              # MACD signal line
     "MACD.hist",                # MACD histogram (conferma forza del segnale)
     "change|1M",                # performance 1 mese %
-    "change|3M",                # performance 3 mesi %
+    "Perf.3M",                  # performance 3 mesi % (campo nativo: "change|3M" non esiste,
+                                 # |3M non e' una risoluzione valida e torna sempre nullo)
     "Rec.All",                  # raccomandazione aggregata TV: -1 vendi forte → +1 compra forte
     "market_cap_basic",         # capitalizzazione di mercato
     "open|1W",                  # apertura settimanale (per candele 1W)
@@ -143,7 +144,7 @@ def parse_tv_row(row, cols=None):
     sig    = d.get("MACD.signal") or 0
     hist   = d.get("MACD.hist")   or (macd - sig)
     p1m    = d.get("change|1M")
-    p3m    = d.get("change|3M")
+    p3m    = d.get("Perf.3M")
     rec    = d.get("Rec.All") or 0
     vol    = d.get("volume")                 or 0
     vol10d = d.get("average_volume_10d_calc") or 0
@@ -244,9 +245,17 @@ def momentum_score(d):
     )
 
 # ─── HELPER FILTRO PYTHON ────────────────────────────────────────────────────
-def _passes_momentum(r, min_price=0.2, min_perf1m=0):
+MIN_LIQUIDITY_EUR = 200_000  # controvalore medio giornaliero minimo (prezzo x volume medio 10gg)
+
+def _passes_momentum(r, min_price=0.2, min_perf1m=0, min_liquidity=MIN_LIQUIDITY_EUR):
     """Filtro applicato in Python dopo la risposta TV (evita cross-column filter API)."""
     if not r.get("price") or r["price"] < min_price:
+        return False
+    # Liquidita': scarta i titoli su cui non si riuscirebbe a uscire facilmente.
+    # Approssimazione: soglia applicata nella valuta nativa del titolo (EUR per l'Italia,
+    # USD per gli USA), senza conversione di cambio — i due tassi sono vicini a parita'
+    # e la soglia serve a scartare le microcap illiquide, non a essere precisa al centesimo.
+    if r["price"] * (r.get("vol_10d") or 0) < min_liquidity:
         return False
     ema20 = r.get("ema20") or 0
     ema50 = r.get("ema50") or 0
@@ -260,6 +269,18 @@ def _passes_momentum(r, min_price=0.2, min_perf1m=0):
     if (r.get("macd_hist") or 0) <= 0:
         return False
     return True
+
+def classify_trend_rimbalzo(r):
+    """TREND: sale a 1M E a 3M. RIMBALZO: sale a 1M ma e' ancora sotto lo zero a 3M.
+    None se il 3M non e' disponibile (non dovrebbe accadere dopo il fix di Perf.3M)."""
+    p1m, p3m = r.get("perf_1m"), r.get("perf_3m")
+    if p1m is None or p3m is None:
+        return None
+    if p1m > 0 and p3m > 0:
+        return "TREND"
+    if p1m > 0 and p3m < 0:
+        return "RIMBALZO"
+    return None
 
 # ─── SCREENER ITALIA (tutti i titoli quotati su Borsa Italiana) ───────────────
 def screen_italy():
@@ -283,8 +304,8 @@ def screen_italy():
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
     rows = [r for r in rows if _passes_momentum(r, min_price=0.2, min_perf1m=0)]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"Italia: {len(rows)} titoli → top {min(10, len(rows))}")
-    return rows[:10]
+    logger.info(f"Italia: {len(rows)} titoli → top {min(5, len(rows))}")
+    return rows[:5]
 
 # ─── SCREENER USA (large + mid + small cap) ───────────────────────────────────
 def screen_usa():
@@ -307,8 +328,8 @@ def screen_usa():
     rows = [parse_tv_row(r) for r in (data.get("data") or [])]
     rows = [r for r in rows if _passes_momentum(r, min_price=1.0, min_perf1m=1)]
     rows.sort(key=momentum_score, reverse=True)
-    logger.info(f"USA: {len(rows)} titoli → top {min(10, len(rows))}")
-    return rows[:10]
+    logger.info(f"USA: {len(rows)} titoli → top {min(5, len(rows))}")
+    return rows[:5]
 
 # ─── SCREENER ETF / ETN / ETC (solo Borsa Italiana) ───────────────────────────
 _ETP_TYPESPECS = {"etf", "etn", "etc", "etp"}
@@ -779,7 +800,8 @@ def generate_analysis(stocks_it, stocks_us, etfs, portfolio, indices):
             return "Nessun titolo ha superato il filtro oggi."
         return "\n".join(
             f"- {d['symbol']} ({d.get('name','')}): prezzo {d['price']}, RSI {d['rsi']}, "
-            f"1M {d.get('perf_1m','n.d.')}%, MACD {d.get('macd_str','n.d.')}, TV Rec: {d.get('rec_str','n.d.')}"
+            f"1M {d.get('perf_1m','n.d.')}%, 3M {d.get('perf_3m','n.d.')}%, "
+            f"MACD {d.get('macd_str','n.d.')}, TV Rec: {d.get('rec_str','n.d.')}"
             for d in lst
         )
 
@@ -818,12 +840,14 @@ PORTAFOGLIO STEFANO:
 Genera un JSON con questa struttura ESATTA (solo JSON puro, zero markdown):
 {{
   "contesto_mercato": "2-3 frasi professionali su sentiment e indici",
-  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe che citano MACD e TV Rec","rating":"Forte"}}],
-  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"2-3 righe che citano MACD e TV Rec","rating":"Moderato"}}],
+  "stocks_it_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento (notizia, settore, dato macro, guidance) — non un consiglio operativo, non dire se comprare o vendere","rating":"Forte"}}],
+  "stocks_us_analysis": [{{"symbol":"TICKER","motivazione":"una riga secca sul possibile catalizzatore del movimento (notizia, settore, dato macro, guidance) — non un consiglio operativo, non dire se comprare o vendere","rating":"Moderato"}}],
   "etfs_analysis": [{{"symbol":"TICKER","tema":"AI / Semiconduttori / ecc.","motivazione":"2-3 righe","rating":"Forte"}}],
   "portfolio_analysis": [{{"symbol":"TICKER","segnale":"Accumula","motivazione":"2-3 righe con riferimento a MACD e trend"}}],
   "sintesi_portafoglio": "2-3 frasi di sintesi operativa"
 }}
+Per stocks_it_analysis e stocks_us_analysis questi titoli sono spunti di ricerca, non idee d'acquisto:
+la motivazione deve spiegare PERCHÉ il titolo si muove (il fatto), mai cosa farne.
 Rating: Forte o Moderato. Segnale: Accumula, Mantieni o Riduci.
 Usa il campo symbol uguale al ticker TV per portfolio_analysis (es. "OMER", "PANW", "MIL:SMH").
 Per qualsiasi ETF a leva menziona sempre il rischio decay da leva giornaliera."""
@@ -1082,6 +1106,15 @@ def rec_badge(rec_str):
     c = colors.get(rec_str, "#888")
     return f'<span style="color:{c};font-size:12px;font-weight:700">● {rec_str}</span>'
 
+def trend_rimbalzo_badge(label):
+    """Badge di classificazione (non un giudizio d'acquisto): distingue un trend
+    confermato su 1M e 3M da un semplice rimbalzo tecnico dopo un calo a 3M."""
+    if label == "TREND":
+        return '<span style="color:#1d4ed8;font-weight:700;white-space:nowrap">📈 TREND</span>'
+    if label == "RIMBALZO":
+        return '<span style="color:#9333ea;font-weight:700;white-space:nowrap">🔄 RIMBALZO</span>'
+    return '<span style="color:#999">n.d.</span>'
+
 def stock_rows(lst, analysis_map, market_delta=0):
     if not lst:
         return '<tr><td colspan="15" style="text-align:center;color:#999;padding:20px">Nessun titolo ha superato il filtro oggi (RSI 48-75, prezzo &gt; EMA20/50, MACD &gt; 0)</td></tr>'
@@ -1103,7 +1136,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td>{raccomandazione_badge(compute_score(d, market_delta))}</td>
+            <td>{trend_rimbalzo_badge(classify_trend_rimbalzo(d))}</td>
             <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
         </tr>"""
     return rows
@@ -1807,25 +1840,25 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <div class="contesto">{analysis.get('contesto_mercato','')}</div>
   </div>
 
-  <!-- TOP 10 AZIONI ITALIANE -->
+  <!-- DA APPROFONDIRE — GIA IN MOVIMENTO (ITALIA) -->
   <div class="section">
-    <h2>Top Azioni Italiane — Momentum <span class="badge-count">{len(stocks_it)} oggi</span></h2>
+    <h2>Da approfondire — già in movimento (Italia) <span class="badge-count">{len(stocks_it)} oggi</span></h2>
     {"" if stocks_it else '<p class="empty-note">Nessun titolo italiano ha superato tutti i filtri oggi (RSI 50-75, prezzo &gt; EMA20/50, volume in crescita).</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Tipo</th><th>Perché sta salendo</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_it, sm_it, mkt_it)}</tbody>
     </table>
   </div>
 
-  <!-- TOP 10 AZIONI USA -->
+  <!-- DA APPROFONDIRE — GIA IN MOVIMENTO (USA) -->
   <div class="section">
-    <h2>Top Azioni USA — Momentum <span class="badge-count">{len(stocks_us)} oggi</span></h2>
+    <h2>Da approfondire — già in movimento (USA) <span class="badge-count">{len(stocks_us)} oggi</span></h2>
     {"" if stocks_us else '<p class="empty-note">Nessun titolo USA ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>Motivazione</th>
+        <th>#</th><th>Titolo</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Tipo</th><th>Perché sta salendo</th>
       </tr></thead>
       <tbody>{stock_rows(stocks_us, sm_us, mkt_us)}</tbody>
     </table>
