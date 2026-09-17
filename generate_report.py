@@ -1611,6 +1611,18 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     document.getElementById("gh-config-saved").style.display = "none";
   }}
 
+  function hideGhConfig() {{
+    document.getElementById("gh-config").style.display = "none";
+    document.getElementById("gh-config-saved").style.display = "block";
+  }}
+
+  // Se le credenziali sono già salvate da una visita precedente, non
+  // mostrare di nuovo il modulo vuoto: sembrerebbe chiedere di nuovo il
+  // token anche quando non serve (dispatchWorkflow legge comunque da qui).
+  if (localStorage.getItem("gh_owner") && localStorage.getItem("gh_repo") && localStorage.getItem("gh_token")) {{
+    hideGhConfig();
+  }}
+
   function saveGhConfig() {{
     const owner = document.getElementById("gh-owner").value.trim();
     const repo  = document.getElementById("gh-repo").value.trim();
@@ -1619,9 +1631,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     localStorage.setItem("gh_owner", owner);
     localStorage.setItem("gh_repo",  repo);
     localStorage.setItem("gh_token", token);
-    document.getElementById("gh-config").style.display = "none";
-    document.getElementById("gh-config-saved").style.display = "block";
-    setStatus("✅ Impostazioni salvate", "#16a34a", 3000);
+    hideGhConfig();
   }}
 
   async function dispatchWorkflow(inputs) {{
