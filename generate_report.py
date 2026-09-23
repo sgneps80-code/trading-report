@@ -1535,7 +1535,12 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False)
     calendario = calendario or []
     segnali_items = segnali_items or []
-    today = datetime.now().strftime("%d %B %Y")
+    # Il run schedulato parte a mercati USA chiusi (22:30 italiane): la
+    # data mostrata è quella del giorno in cui il report verrà letto, non
+    # quella della sera di generazione (vedi REPORT_DATE_OFFSET_DAYS nel
+    # workflow). "generated" resta l'orario reale di generazione.
+    offset_giorni = int(os.environ.get("REPORT_DATE_OFFSET_DAYS", "0"))
+    today = (datetime.now() + timedelta(days=offset_giorni)).strftime("%d %B %Y")
     generated = datetime.now().strftime("%d/%m/%Y %H:%M UTC")
 
     sm_it  = _analysis_map(analysis.get("stocks_it_analysis", []))

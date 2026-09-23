@@ -2,8 +2,13 @@ name: Daily Trading Report
 
 on:
   schedule:
-    # 10:30 ora italiana estiva (CEST = UTC+2) → 08:30 UTC
-    - cron: '30 8 * * 1-5'
+    # 22:30 ora italiana estiva (CEST = UTC+2) → 20:30 UTC, dopo la
+    # chiusura di Wall Street (16:00 ET). In inverno (CET = UTC+1) questo
+    # stesso orario UTC corrisponde alle 21:30 italiane — un'ora prima,
+    # perché il cron di GitHub Actions è fisso in UTC e non segue il
+    # cambio d'ora. Da aggiornare qui se serve tornare a 22:30 anche
+    # d'inverno.
+    - cron: '30 20 * * 1-5'
   workflow_dispatch:
     inputs:
       portfolio_json:
@@ -71,6 +76,12 @@ jobs:
           REGOLE_POSIZIONI_YAML: ${{ inputs.regole_posizioni_yaml != '' && inputs.regole_posizioni_yaml || secrets.REGOLE_POSIZIONI_YAML }}
           WATCHLIST_YAML: ${{ secrets.WATCHLIST_YAML }}
           STORICO_SALT: ${{ secrets.STORICO_SALT }}
+          # Il run schedulato parte a mercati USA chiusi (22:30 italiane):
+          # la data mostrata sul report è quella del giorno dopo, il
+          # giorno in cui verrà letto. Un run manuale (workflow_dispatch,
+          # es. dopo aver caricato il dossier) resta datato al giorno
+          # stesso, non ha lo stesso significato "sera per il domani".
+          REPORT_DATE_OFFSET_DAYS: ${{ github.event_name == 'schedule' && '1' || '0' }}
         run: python generate_report.py
 
       - name: Salva dati personali aggiornati come secret
@@ -90,10 +101,12 @@ jobs:
           if [ -n "$NEW_REGOLE" ]; then printf '%s' "$NEW_REGOLE" | gh secret set REGOLE_POSIZIONI_YAML; fi
 
       - name: Commit and push report
+        env:
+          REPORT_DATE_OFFSET_DAYS: ${{ github.event_name == 'schedule' && '1' || '0' }}
         run: |
           git config user.name "trading-bot"
           git config user.email "bot@trading-report"
           git add docs/index.html data/storico_indicatori.csv
-          git diff --staged --quiet || git commit -m "report: $(date +'%Y-%m-%d')"
+          git diff --staged --quiet || git commit -m "report: $(date -u -d "+${REPORT_DATE_OFFSET_DAYS} day" +'%Y-%m-%d')"
           git pull --rebase origin main
           git push
