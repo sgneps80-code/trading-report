@@ -1326,6 +1326,8 @@ def distanza_da_livello_html(price, livello, verso_alto):
     return f'<span style="color:{color};font-weight:600">{dist:+.1f}%</span>'
 
 def trend_ema_html(sopra, giorni, certo, label):
+    if sopra is None:
+        return f'<span style="color:#999;white-space:nowrap">n.d. {label}</span>'
     freccia, stato = ("▲", "Sopra") if sopra else ("▼", "Sotto")
     color = "#16a34a" if sopra else "#dc2626"
     if giorni is None:
@@ -1413,15 +1415,21 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
         # ha visto un cambio di stato — e in assenza anche di quello, sullo
         # stato del solo giorno corrente (nessuna durata).
         if sopra50 is None:
-            sopra50 = bool(price and ema50 and price > ema50)
-            g50, certo50 = storico.giorni_in_stato(
-                isin, lambda r: bool(r["close"] and r["ema50"] and r["close"] > r["ema50"]), sopra50
-            ) if isin else (None, False)
+            if price and ema50:
+                sopra50 = price > ema50
+                g50, certo50 = storico.giorni_in_stato(
+                    isin, lambda r: bool(r["close"] and r["ema50"] and r["close"] > r["ema50"]), sopra50
+                ) if isin else (None, False)
+            else:
+                g50, certo50 = None, False
         if sopra200 is None:
-            sopra200 = bool(price and ema200 and price > ema200)
-            g200, certo200 = storico.giorni_in_stato(
-                isin, lambda r: bool(r["close"] and r["ema200"] and r["close"] > r["ema200"]), sopra200
-            ) if isin else (None, False)
+            if price and ema200:
+                sopra200 = price > ema200
+                g200, certo200 = storico.giorni_in_stato(
+                    isin, lambda r: bool(r["close"] and r["ema200"] and r["close"] > r["ema200"]), sopra200
+                ) if isin else (None, False)
+            else:
+                g200, certo200 = None, False
         price_str = f"{price:.2f}" if price else "n.d."
         divisa = p.get("divisa") or ""
         tesi = regola.get("tesi") or ""
