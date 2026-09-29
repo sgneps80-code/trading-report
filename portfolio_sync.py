@@ -49,6 +49,11 @@ ISIN_MAP_JSON = os.environ.get("ISIN_MAP_JSON", "")
 # Dossier Titoli"), cosi' che un nuovo caricamento possa essere solo
 # l'ultimo mese/trimestre invece di tutta la storia da capo ogni volta.
 MOVIMENTI_STORICO_JSON = os.environ.get("MOVIMENTI_STORICO_JSON", "")
+# Operazione di manutenzione esplicita (mai dalla pagina normale): quando
+# impostato, SOSTITUISCE interamente l'accumulo invece di unirvisi — serve
+# per potare posizioni chiuse da tempo, che altrimenti l'accumulo (solo
+# additivo per design) non potrebbe mai perdere.
+MOVIMENTI_STORICO_RESET_JSON = os.environ.get("MOVIMENTI_STORICO_RESET_JSON", "")
 
 
 def dossier_disponibile():
@@ -346,13 +351,17 @@ def serializza_movimenti_storico(movimenti):
 
 def _carica_movimenti_storico():
     """Movimenti gia' accumulati da caricamenti precedenti (secret
-    MOVIMENTI_STORICO_JSON) — [] al primissimo caricamento in assoluto."""
-    if not MOVIMENTI_STORICO_JSON:
+    MOVIMENTI_STORICO_JSON) — [] al primissimo caricamento in assoluto.
+    Se MOVIMENTI_STORICO_RESET_JSON e' impostato (manutenzione esplicita),
+    lo usa al posto dell'accumulo normale: vedi _carica_posizioni per come
+    questo evita che il caricamento in corso lo faccia subito ricrescere."""
+    sorgente = MOVIMENTI_STORICO_RESET_JSON or MOVIMENTI_STORICO_JSON
+    if not sorgente:
         return []
     try:
-        return [_movimento_da_dict_json(d) for d in json.loads(MOVIMENTI_STORICO_JSON)]
+        return [_movimento_da_dict_json(d) for d in json.loads(sorgente)]
     except Exception as e:
-        logger.warning(f"MOVIMENTI_STORICO_JSON illeggibile ({e}), riparto da zero")
+        logger.warning(f"storico movimenti illeggibile ({e}), riparto da zero")
         return []
 
 
@@ -405,14 +414,22 @@ def _carica_posizioni():
     i, cols = _trova_header(righe, _HEADER_MOVIMENTI, ["isin", "segno", "quantita"])
     if i is not None:
         logger.info(f"Formato dossier rilevato: Movimenti Dossier Titoli (da {origine})")
-        nuovi = _estrai_movimenti(righe[i + 1:], cols)
-        precedenti = _carica_movimenti_storico()
-        unione, n_aggiunti = _unisci_movimenti(precedenti, nuovi)
-        if precedenti:
-            logger.info(
-                f"Storico movimenti: {n_aggiunti} nuovi su {len(nuovi)} letti in "
-                f"questo file, {len(unione)} totali accumulati"
-            )
+        if MOVIMENTI_STORICO_RESET_JSON:
+            # Manutenzione: lo storico fornito SOSTITUISCE l'accumulo, non si
+            # unisce a questo caricamento — altrimenti le righe appena potate
+            # ricomparirebbero subito, perche' il dossier caricato/salvato in
+            # precedenza le contiene ancora.
+            unione = _carica_movimenti_storico()
+            logger.info(f"Storico movimenti sostituito (manutenzione): {len(unione)} totali")
+        else:
+            nuovi = _estrai_movimenti(righe[i + 1:], cols)
+            precedenti = _carica_movimenti_storico()
+            unione, n_aggiunti = _unisci_movimenti(precedenti, nuovi)
+            if precedenti:
+                logger.info(
+                    f"Storico movimenti: {n_aggiunti} nuovi su {len(nuovi)} letti in "
+                    f"questo file, {len(unione)} totali accumulati"
+                )
         return build_fifo_positions(unione), unione
 
     i, cols = _trova_header(righe, _HEADER_SINTESI, ["isin", "prezzo_medio", "quantita"])
