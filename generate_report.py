@@ -1426,12 +1426,14 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
             ticker_input = (f'<br><input id="sym-{idx}" value="{html.escape(simbolo)}" '
                              f'placeholder="MIL:TICKER" style="width:100px;{mini}">')
             stop_input = (f'<br><input id="stop-{idx}" type="number" step="0.01" '
+                          f'placeholder="prezzo stop" title="Prezzo del tuo stop-loss (non una distanza)" '
                           f'value="{regola.get("stop") if regola.get("stop") is not None else ""}" '
                           f'style="width:80px;{mini}">')
             target_input = (f'<br><input id="target-{idx}" type="number" step="0.01" '
+                            f'placeholder="prezzo target" title="Prezzo del tuo target (non una distanza)" '
                             f'value="{regola.get("target") if regola.get("target") is not None else ""}" '
                             f'style="width:80px;{mini}">')
-            rev_input = (f'<br><input id="rev-{idx}" type="date" title="Prossima revisione" '
+            rev_input = (f'<br><input id="rev-{idx}" type="date" title="Data in cui vuoi rivedere la tesi (facoltativo)" '
                         f'value="{revisione.isoformat() if revisione else ""}" style="{mini}">')
             tesi_field = (f'<input id="tesi-{idx}" value="{html.escape(tesi)}" '
                          f'placeholder="perché tieni questa posizione" style="width:100%;{mini}">')
