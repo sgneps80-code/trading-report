@@ -45,6 +45,10 @@ MOVIMENTI_PATH = os.environ.get("MOVIMENTI_PATH", "data/movimenti_dossier.xlsx")
 ISIN_MAP_PATH = os.environ.get("ISIN_MAP_PATH", "data/isin_map.json")
 MOVIMENTI_XLSX_B64 = os.environ.get("MOVIMENTI_XLSX_B64", "")
 ISIN_MAP_JSON = os.environ.get("ISIN_MAP_JSON", "")
+# Movimenti accumulati dai caricamenti precedenti (formato "Movimenti
+# Dossier Titoli"), cosi' che un nuovo caricamento possa essere solo
+# l'ultimo mese/trimestre invece di tutta la storia da capo ogni volta.
+MOVIMENTI_STORICO_JSON = os.environ.get("MOVIMENTI_STORICO_JSON", "")
 
 
 def dossier_disponibile():
@@ -243,8 +247,9 @@ def build_fifo_positions(movimenti):
                     # Vendita superiore ai lotti registrati: probabile acquisto
                     # precedente all'inizio dello storico esportato. Segnala e
                     # ignora l'eccedenza, senza far esplodere il calcolo.
+                    # Niente ISIN reale nel log: e' un repo pubblico, il log lo e' con lui.
                     logger.warning(
-                        f"{isin}: vendute {da_vendere:.2f} unita' senza lotto "
+                        f"vendute {da_vendere:.2f} unita' di una posizione senza lotto "
                         f"corrispondente (storico movimenti incompleto?)"
                     )
 
@@ -307,25 +312,86 @@ def _estrai_posizioni_sintesi(righe, cols):
     return out
 
 
+def _chiave_movimento(m):
+    """Identifica un movimento abbastanza da riconoscere righe gia' viste in
+    un caricamento precedente che si sovrappone in parte col nuovo
+    (aggiornamenti non esattamente periodici, es. carichi un file che
+    ripete l'ultima settimana gia' nota): stesso ISIN, data valuta, segno,
+    quantita', prezzo e divisa. Limite accettato: l'export del broker non
+    ha un ID operazione univoco, quindi due operazioni davvero identiche
+    in tutto questo nello stesso giorno verrebbero contate una sola volta."""
+    return (
+        m["isin"], m["data_valuta"].isoformat(), m["segno"],
+        round(m["quantita"], 4), round(m["prezzo"], 4), m["divisa"],
+    )
+
+
+def _movimento_a_dict_json(m):
+    d = dict(m)
+    d["data_valuta"] = m["data_valuta"].isoformat()
+    return d
+
+
+def _movimento_da_dict_json(d):
+    m = dict(d)
+    m["data_valuta"] = date.fromisoformat(d["data_valuta"])
+    return m
+
+
+def serializza_movimenti_storico(movimenti):
+    """JSON dei movimenti accumulati, nella forma da salvare nel secret
+    MOVIMENTI_STORICO_JSON (vedi _carica_movimenti_storico)."""
+    return json.dumps([_movimento_a_dict_json(m) for m in movimenti], ensure_ascii=False)
+
+
+def _carica_movimenti_storico():
+    """Movimenti gia' accumulati da caricamenti precedenti (secret
+    MOVIMENTI_STORICO_JSON) — [] al primissimo caricamento in assoluto."""
+    if not MOVIMENTI_STORICO_JSON:
+        return []
+    try:
+        return [_movimento_da_dict_json(d) for d in json.loads(MOVIMENTI_STORICO_JSON)]
+    except Exception as e:
+        logger.warning(f"MOVIMENTI_STORICO_JSON illeggibile ({e}), riparto da zero")
+        return []
+
+
+def _unisci_movimenti(precedenti, nuovi):
+    """Aggiunge ai movimenti gia' noti solo quelli nuovi (stessa chiave, vedi
+    _chiave_movimento): permette caricamenti incrementali non esattamente
+    periodici, anche con un po' di sovrapposizione col file caricato
+    l'ultima volta, senza contare due volte lo stesso movimento."""
+    viste = {_chiave_movimento(m) for m in precedenti}
+    aggiunti = [m for m in nuovi if _chiave_movimento(m) not in viste]
+    unione = precedenti + aggiunti
+    unione.sort(key=lambda m: m["data_valuta"])
+    return unione, len(aggiunti)
+
+
 def _carica_posizioni():
     """Legge il dossier (secret MOVIMENTI_XLSX_B64 se presente, altrimenti il
     file committato), riconosce il formato dall'intestazione e restituisce
-    le posizioni aperte in una forma unica, indipendente dal formato di
-    origine. [] con un log chiaro se il dossier manca o non e' valido —
-    mai un'eccezione che fa fallire il resto del report."""
+    (posizioni, movimenti_storico). posizioni e' la forma unica attesa dal
+    resto della pipeline, indipendente dal formato di origine. Per il
+    formato "Movimenti Dossier Titoli", movimenti_storico e' l'elenco
+    completo (accumulato + questo caricamento, deduplicato) da salvare nel
+    secret MOVIMENTI_STORICO_JSON per i prossimi caricamenti incrementali;
+    None per "Portafoglio di sintesi" (niente da accumulare, e' gia' uno
+    snapshot completo). ([], None) con un log chiaro se il dossier manca
+    o non e' valido — mai un'eccezione che fa fallire il resto del report."""
     if MOVIMENTI_XLSX_B64:
         try:
             sorgente = base64.b64decode(MOVIMENTI_XLSX_B64)
         except Exception as e:
             logger.error(f"MOVIMENTI_XLSX_B64 illeggibile ({e})")
-            return []
+            return [], None
         origine = f"secret MOVIMENTI_XLSX_B64 ({len(sorgente)} byte)"
     elif os.path.exists(MOVIMENTI_PATH):
         sorgente = MOVIMENTI_PATH
         origine = MOVIMENTI_PATH
     else:
         logger.warning(f"Dossier movimenti non trovato: né secret MOVIMENTI_XLSX_B64 né {MOVIMENTI_PATH}")
-        return []
+        return [], None
 
     try:
         righe = _righe_da_file(sorgente)
@@ -334,23 +400,31 @@ def _carica_posizioni():
             f"Dossier illeggibile da {origine} ({e}). Verifica che sia un "
             "export .xlsx o .xls valido del tuo broker."
         )
-        return []
+        return [], None
 
     i, cols = _trova_header(righe, _HEADER_MOVIMENTI, ["isin", "segno", "quantita"])
     if i is not None:
         logger.info(f"Formato dossier rilevato: Movimenti Dossier Titoli (da {origine})")
-        return build_fifo_positions(_estrai_movimenti(righe[i + 1:], cols))
+        nuovi = _estrai_movimenti(righe[i + 1:], cols)
+        precedenti = _carica_movimenti_storico()
+        unione, n_aggiunti = _unisci_movimenti(precedenti, nuovi)
+        if precedenti:
+            logger.info(
+                f"Storico movimenti: {n_aggiunti} nuovi su {len(nuovi)} letti in "
+                f"questo file, {len(unione)} totali accumulati"
+            )
+        return build_fifo_positions(unione), unione
 
     i, cols = _trova_header(righe, _HEADER_SINTESI, ["isin", "prezzo_medio", "quantita"])
     if i is not None:
         logger.info(f"Formato dossier rilevato: Portafoglio di sintesi (da {origine})")
-        return _estrai_posizioni_sintesi(righe[i + 1:], cols)
+        return _estrai_posizioni_sintesi(righe[i + 1:], cols), None
 
     logger.error(
         f"Intestazioni non riconosciute in {origine}: non corrispondono né a "
         "'Movimenti Dossier Titoli' né a 'Portafoglio di sintesi'."
     )
-    return []
+    return [], None
 
 
 def load_isin_map(path=None):
@@ -376,20 +450,23 @@ def load_isin_map(path=None):
 
 def sync_portfolio():
     """Punto d'ingresso: dossier → posizioni aperte → ticker TradingView.
-    Restituisce la stessa forma di lista che il resto della pipeline si aspetta
-    da PORTFOLIO ([{"symbol","name","type",...}]), con i campi aggiuntivi.
+    Restituisce (portfolio, movimenti_storico): portfolio e' la stessa forma
+    di lista che il resto della pipeline si aspetta da PORTFOLIO
+    ([{"symbol","name","type",...}]), con i campi aggiuntivi. movimenti_storico
+    e' None oppure l'elenco di movimenti da salvare in MOVIMENTI_STORICO_JSON
+    per i prossimi caricamenti incrementali (vedi _carica_posizioni).
     Se l'ISIN non e' ancora mappato in data/isin_map.json, usa come
     suggerimento il ticker del broker (guess_tv_symbol) invece dell'ISIN
     nudo — resta comunque solo un suggerimento, mai un dato certo."""
-    posizioni = _carica_posizioni()
+    posizioni, movimenti_storico = _carica_posizioni()
     isin_map = load_isin_map()
 
-    non_mappati = []
+    n_non_mappati = 0
     out = []
     for p in posizioni:
         mapped = isin_map.get(p["isin"])
         if not mapped:
-            non_mappati.append(f'{p["isin"]} ({p["titolo"]})')
+            n_non_mappati += 1
         symbol = (mapped or {}).get("tv_symbol") or guess_tv_symbol(p.get("simbolo_broker")) or p["isin"]
         out.append({
             "symbol": symbol,
@@ -402,10 +479,13 @@ def sync_portfolio():
             "data_apertura": p["data_apertura"],
             "giorni_detenzione": p["giorni_detenzione"],
         })
-    if non_mappati:
+    if n_non_mappati:
+        # Niente ISIN/nomi reali nel log: e' un repo pubblico, il log lo e' con lui.
+        # Il dettaglio (quali posizioni) e' comunque visibile nella tabella
+        # "Le mie posizioni" della pagina del report, non nel log pubblico.
         logger.warning(
-            f"ISIN senza ticker TradingView confermato in {ISIN_MAP_PATH} (usato un "
-            "suggerimento dal simbolo broker, da verificare nell'editor delle regole): "
-            + "; ".join(non_mappati)
+            f"{n_non_mappati} posizioni senza ticker TradingView confermato in "
+            f"{ISIN_MAP_PATH} (usato un suggerimento dal simbolo broker) — "
+            "verificale nella tabella \"Le mie posizioni\" della pagina."
         )
-    return out
+    return out, movimenti_storico

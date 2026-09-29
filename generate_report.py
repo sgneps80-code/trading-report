@@ -28,8 +28,15 @@ if _portfolio_input:
     PORTFOLIO = json.loads(_portfolio_input)
     logger.info("Portfolio caricato da workflow_dispatch (override manuale)")
 elif portfolio_sync.dossier_disponibile():
-    PORTFOLIO = portfolio_sync.sync_portfolio()
+    PORTFOLIO, _movimenti_storico = portfolio_sync.sync_portfolio()
     logger.info(f"Portfolio sincronizzato da dossier XLS: {len(PORTFOLIO)} posizioni aperte")
+    if _movimenti_storico is not None:
+        # Mai in data/ o docs/: quei percorsi sono gli unici che "Commit and
+        # push report" mette in git. Fuori dal repo, solo per passare il
+        # testimone allo step successivo del workflow, che lo salva nel
+        # secret MOVIMENTI_STORICO_JSON (mai in un file committato).
+        with open("/tmp/movimenti_storico_merged.json", "w", encoding="utf-8") as f:
+            f.write(portfolio_sync.serializza_movimenti_storico(_movimenti_storico))
 else:
     PORTFOLIO = json.loads(os.environ.get("PORTFOLIO_JSON", "[]"))
     logger.info("Portfolio caricato da PORTFOLIO_JSON secret (legacy: nessun dossier XLS trovato)")
@@ -793,7 +800,8 @@ def get_portfolio_data():
     missing = [p["symbol"] for p in PORTFOLIO if _is_missing(p["symbol"])]
 
     if missing:
-        logger.info(f"Portfolio retry exchange fallback per: {missing}")
+        # Niente ticker reali nel log: e' un repo pubblico, il log lo e' con lui.
+        logger.info(f"Portfolio retry exchange fallback per {len(missing)} posizioni")
         # Estrai il ticker nudo e riprova con tutti gli exchange candidati
         retry_syms = [
             f"{ex}:{sym.split(':')[-1]}"
@@ -812,9 +820,9 @@ def get_portfolio_data():
             parsed["name"]      = item.get("name", parsed.get("symbol", sym))
             parsed["type"]      = item.get("type", "Azione")
             parsed["yf_symbol"] = sym
-            logger.info(f"Portfolio: {sym} → prezzo {parsed.get('price')}")
         else:
-            logger.warning(f"Portfolio: dati non trovati per '{sym}' (ticker={ticker})")
+            # Niente ticker reali nel log: e' un repo pubblico, il log lo e' con lui.
+            logger.warning("Portfolio: dati non trovati per una posizione")
             parsed = {
                 "symbol": ticker, "yf_symbol": sym,
                 "name": item.get("name", sym), "type": item.get("type", "Azione"),
