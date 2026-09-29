@@ -27,6 +27,10 @@ on:
         description: 'Regole di posizione YAML, dalla pagina del report (lascia vuoto per run schedulato)'
         required: false
         default: ''
+      movimenti_storico_reset_json:
+        description: 'Manutenzione: sostituisce interamente lo storico movimenti accumulato (mai dalla pagina normale)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -60,7 +64,7 @@ jobs:
         # cosi' non compare mai ne' nel testo del comando ne' in un blocco
         # env — il masking scatta come primissima cosa che questo script fa.
         run: |
-          for campo in portfolio_json movimenti_xlsx_b64 isin_map_json regole_posizioni_yaml; do
+          for campo in portfolio_json movimenti_xlsx_b64 isin_map_json regole_posizioni_yaml movimenti_storico_reset_json; do
             valore=$(python3 -c "import json; print(json.load(open('$GITHUB_EVENT_PATH', encoding='utf-8')).get('inputs', {}).get('$campo') or '')")
             if [ -n "$valore" ]; then
               echo "::add-mask::$valore"
@@ -87,6 +91,9 @@ jobs:
           # pezzo di storico ogni volta, non tutto da capo. Lo step sotto
           # salva la versione aggiornata (accumulo + questo caricamento).
           MOVIMENTI_STORICO_JSON: ${{ secrets.MOVIMENTI_STORICO_JSON }}
+          # Manutenzione esplicita (mai dalla pagina normale): se presente,
+          # sostituisce l'accumulo invece di unirvisi. Vedi portfolio_sync.py.
+          MOVIMENTI_STORICO_RESET_JSON: ${{ inputs.movimenti_storico_reset_json }}
           # Il run schedulato parte a mercati USA chiusi (22:30 italiane):
           # la data mostrata sul report è quella del giorno dopo, il
           # giorno in cui verrà letto. Un run manuale (workflow_dispatch,
