@@ -63,6 +63,7 @@ _HEADER_MOVIMENTI = {
     "titolo": "titolo",
     "isin": "isin",
     "segno a/v": "segno",
+    "segno": "segno",
     "quantità": "quantita",
     "quantita": "quantita",
     "divisa": "divisa",
@@ -255,7 +256,10 @@ def build_fifo_positions(movimenti):
         # Data di apertura media, pesata per quantita' sui lotti ancora aperti
         avg_ord = sum(l["qty"] * l["data"].toordinal() for l in lots) / tot_qty
         entry_date = date.fromordinal(round(avg_ord))
-        holding_days = (date.today() - entry_date).days
+        # "Data valuta" e' la data di regolamento, non quella dell'ordine:
+        # per un acquisto fatto oggi puo' cadere 1-2 giorni nel futuro
+        # (T+1/T+2), dando un conteggio negativo altrimenti privo di senso.
+        holding_days = max(0, (date.today() - entry_date).days)
 
         positions.append({
             "isin": isin,
