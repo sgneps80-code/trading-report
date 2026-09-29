@@ -76,6 +76,11 @@ jobs:
           REGOLE_POSIZIONI_YAML: ${{ inputs.regole_posizioni_yaml != '' && inputs.regole_posizioni_yaml || secrets.REGOLE_POSIZIONI_YAML }}
           WATCHLIST_YAML: ${{ secrets.WATCHLIST_YAML }}
           STORICO_SALT: ${{ secrets.STORICO_SALT }}
+          # Movimenti accumulati dai caricamenti precedenti (formato
+          # "Movimenti Dossier Titoli"): permette di caricare solo l'ultimo
+          # pezzo di storico ogni volta, non tutto da capo. Lo step sotto
+          # salva la versione aggiornata (accumulo + questo caricamento).
+          MOVIMENTI_STORICO_JSON: ${{ secrets.MOVIMENTI_STORICO_JSON }}
           # Il run schedulato parte a mercati USA chiusi (22:30 italiane):
           # la data mostrata sul report è quella del giorno dopo, il
           # giorno in cui verrà letto. Un run manuale (workflow_dispatch,
@@ -99,6 +104,13 @@ jobs:
           if [ -n "$NEW_MOVIMENTI" ]; then printf '%s' "$NEW_MOVIMENTI" | gh secret set MOVIMENTI_XLSX_B64; fi
           if [ -n "$NEW_ISIN_MAP" ]; then printf '%s' "$NEW_ISIN_MAP" | gh secret set ISIN_MAP_JSON; fi
           if [ -n "$NEW_REGOLE" ]; then printf '%s' "$NEW_REGOLE" | gh secret set REGOLE_POSIZIONI_YAML; fi
+          # Movimenti accumulati (vedi step sopra): passati per file, non per
+          # env, perché generate_report.py li calcola a runtime — non sono
+          # un input noto in anticipo da poter mascherare con ::add-mask::.
+          if [ -s /tmp/movimenti_storico_merged.json ]; then
+            gh secret set MOVIMENTI_STORICO_JSON < /tmp/movimenti_storico_merged.json
+            rm -f /tmp/movimenti_storico_merged.json
+          fi
 
       - name: Commit and push report
         env:
