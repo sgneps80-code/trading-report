@@ -232,7 +232,17 @@ def build_fifo_positions(movimenti):
 
     positions = []
     for isin, righe in by_isin.items():
-        righe = sorted(righe, key=lambda r: r["data_valuta"])
+        # "Data valuta" non ha l'orario: due operazioni sullo stesso titolo
+        # nello stesso giorno hanno la stessa data, ma l'ordine nel file non
+        # e' garantito essere quello reale. Tra acquisti e vendite pari data,
+        # si processano prima gli acquisti ("A" < "V" nell'ordinamento) — se
+        # processata per prima una vendita che chiude un lotto riaperto lo
+        # stesso giorno risulterebbe "senza lotto corrispondente" e la
+        # posizione sparirebbe/riapparirebbe per errore invece di restare
+        # coerente con l'ultimo saldo reale (verificato contro un export
+        # "Portafoglio di sintesi" dello stesso giorno: 7 posizioni aperte,
+        # non le 14 che l'ordine grezzo del file produceva).
+        righe = sorted(righe, key=lambda r: (r["data_valuta"], r["segno"]))
         lots = deque()  # ognuno: {"qty", "prezzo", "data"}
         titolo, divisa = righe[-1]["titolo"], righe[-1]["divisa"]
 
