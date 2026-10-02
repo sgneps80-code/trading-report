@@ -14,6 +14,8 @@ Mettere questi 3 file nella stessa cartella e aprire `index.html` con il browser
 - **Torta e tabella**: clic su una macro area (es. *Tempo libero*) per vedere il dettaglio (*Ristorazione*, *Cinema e spettacoli*, *Parchi divertimento*…), poi clic su un dettaglio per vedere i suoi movimenti.
 - **«✎ Classifica» (o clic sulla riga di un movimento)**: cambia la categoria solo per quel movimento, oppure crea una regola ("tutti i movimenti che contengono…") valida anche per i file futuri.
 - **Solo da classificare**: mostra i movimenti che nessuna regola ha riconosciuto.
+- **Lista movimenti**: filtro *Come grafico* (segue la fetta/riga cliccata), *Tutti*, *Entrate* o *Uscite* sul periodo scelto,
+  con totale entrate, uscite e saldo della lista. Si può ordinare per data o importo ed esportare la lista in CSV (si apre con Excel).
 
 ## Dove sono salvati i dati
 Nel `localStorage` del browser, solo sul tuo PC. Non vengono inviati da nessuna parte.

@@ -125,6 +125,10 @@ table.data tfoot td { font-weight: 700; border-bottom: 0; }
 /* movimenti */
 .mov-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .mov-scroll { max-height: 520px; overflow: auto; }
+.mov-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
+.mov-filters .seg button { padding: 5px 12px; font-size: 13px; }
+.mov-sum { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--text-2); padding: 8px 10px; background: var(--surface-2); border-radius: 8px; margin-bottom: 10px; font-variant-numeric: tabular-nums; }
+.mov-sum b { color: var(--text); }
 .mov td { font-size: 13px; }
 .mov { table-layout: fixed; }
 .mov .desc { overflow-wrap: anywhere; }
@@ -236,6 +240,22 @@ details summary { cursor: pointer; font-weight: 600; }
         <label class="sub"><input type="checkbox" id="onlyTodo"> Solo da classificare</label>
       </div>
     </div>
+    <div class="mov-filters">
+      <div class="seg" id="movSeg">
+        <button data-f="chart" class="on" title="Segue la selezione del grafico (macro area e dettaglio)">Come grafico</button>
+        <button data-f="all">Tutti</button>
+        <button data-f="in">Entrate</button>
+        <button data-f="out">Uscite</button>
+      </div>
+      <select id="movSort" title="Ordinamento">
+        <option value="date">Più recenti prima</option>
+        <option value="dateAsc">Meno recenti prima</option>
+        <option value="amtDesc">Importo più alto prima</option>
+        <option value="amtAsc">Importo più basso prima</option>
+      </select>
+      <button id="btnCsv" class="btn-ghost" title="Scarica la lista visualizzata in formato CSV (apribile con Excel)">Esporta lista CSV</button>
+    </div>
+    <div class="mov-sum" id="movSum"></div>
     <div class="mov-scroll" id="movBox"></div>
   </section>
 
@@ -289,6 +309,7 @@ const pct = v => (v * 100).toLocaleString("it-IT", { maximumFractionDigits: 1 })
 let db = load();
 let ui = Object.assign({ months: null, dir: "out", macro: null, det: null, exclGiro: true }, db.ui || {});
 let lastClickedMonth = null;
+let movFilter = "chart", visibleMovs = [];
 
 function load() {
   try {
@@ -613,6 +634,7 @@ function renderAnalysis() {
   });
 }
 function drill(name) {
+  movFilter = "chart";
   if (!ui.macro) { ui.macro = name; ui.det = null; }
   else ui.det = ui.det === name ? null : name;
   renderAnalysis(); renderMovs();
@@ -665,13 +687,32 @@ function renderPie(slices, total, level) {
 function renderMovs() {
   const q = document.getElementById("search").value.trim().toLowerCase();
   const onlyTodo = document.getElementById("onlyTodo").checked;
-  let { movs } = currentRows();
-  if (ui.det) movs = movs.filter(m => classify(m).det === ui.det);
-  if (onlyTodo) movs = inPeriod().filter(m => classify(m).todo);
+  const f = movFilter;
+  document.querySelectorAll("#movSeg button").forEach(b => b.classList.toggle("on", b.dataset.f === f));
+  let movs;
+  if (f === "chart") {
+    movs = currentRows().movs;
+    if (ui.det) movs = movs.filter(m => classify(m).det === ui.det);
+  } else movs = inPeriod().filter(m => f === "all" || (f === "in" ? m.amt > 0 : m.amt < 0));
+  if (onlyTodo) movs = inPeriod().filter(m => classify(m).todo && (f === "all" || f === "chart" || (f === "in" ? m.amt > 0 : m.amt < 0)));
   if (q) movs = movs.filter(m => (m.desc + " " + m.full + " " + classify(m).macro + " " + classify(m).det).toLowerCase().includes(q));
+  const sort = document.getElementById("movSort").value;
+  const cmp = { date: (a, b) => b.dVal.localeCompare(a.dVal), dateAsc: (a, b) => a.dVal.localeCompare(b.dVal),
+                amtDesc: (a, b) => Math.abs(b.amt) - Math.abs(a.amt), amtAsc: (a, b) => Math.abs(a.amt) - Math.abs(b.amt) }[sort];
+  movs = movs.slice().sort(cmp);
+  visibleMovs = movs;
   const ttl = document.getElementById("movTitle");
   ttl.textContent = onlyTodo ? "Movimenti da classificare" :
+    f === "all" ? "Movimenti · entrate e uscite" : f === "in" ? "Movimenti · entrate" : f === "out" ? "Movimenti · uscite" :
     `Movimenti · ${ui.dir === "in" ? "entrate" : "uscite"}${ui.macro ? " · " + ui.macro : ""}${ui.det ? " › " + ui.det : ""}`;
+  const inn = movs.filter(m => m.amt > 0).reduce((a, m) => a + m.amt, 0);
+  const out = movs.filter(m => m.amt < 0).reduce((a, m) => a - m.amt, 0);
+  const nIn = movs.filter(m => m.amt > 0).length, nOut = movs.length - nIn;
+  document.getElementById("movSum").innerHTML =
+    `<span><b>${movs.length}</b> movimenti · ${esc(periodLabel())}</span>` +
+    (nIn ? `<span>Entrate: <b class="pos">${fmt.format(inn)}</b> (${nIn})</span>` : "") +
+    (nOut ? `<span>Uscite: <b class="neg">${fmt.format(-out)}</b> (${nOut})</span>` : "") +
+    (nIn && nOut ? `<span>Saldo: <b class="${inn - out >= 0 ? "pos" : "neg"}">${fmt.format(inn - out)}</b></span>` : "");
   const box = document.getElementById("movBox");
   if (!movs.length) { box.innerHTML = `<div class="empty">Nessun movimento.</div>`; return; }
   const shown = movs.slice(0, 800);
@@ -751,6 +792,24 @@ document.getElementById("dirSeg").onclick = e => {
 document.getElementById("exclGiro").onchange = e => { ui.exclGiro = e.target.checked; save(); renderAll(); };
 document.getElementById("search").oninput = renderMovs;
 document.getElementById("onlyTodo").onchange = renderMovs;
+document.getElementById("movSort").onchange = renderMovs;
+document.getElementById("movSeg").onclick = e => {
+  const b = e.target.closest("button"); if (!b) return;
+  movFilter = b.dataset.f; renderMovs();
+};
+document.getElementById("btnCsv").onclick = () => {
+  const q = v => `"${String(v).replace(/"/g, '""')}"`;
+  const rows = [["Data valuta", "Data operazione", "Entrate", "Uscite", "Macro area", "Dettaglio", "Esercente", "Descrizione", "Descrizione completa"]]
+    .concat(visibleMovs.map(m => { const c = classify(m);
+      const n = v => v ? v.toFixed(2).replace(".", ",") : "";
+      return [m.dVal.split("-").reverse().join("/"), (m.dOp || "").split("-").reverse().join("/"),
+              n(m.amt > 0 ? m.amt : 0), n(m.amt < 0 ? m.amt : 0), c.macro, c.det, merchant(m), m.desc, m.full]; }));
+  const csv = "\ufeff" + rows.map(r => r.map(q).join(";")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  a.download = `movimenti-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
 document.getElementById("btnExport").onclick = () => {
   const blob = new Blob([JSON.stringify({ ...db, ui: undefined }, null, 1)], { type: "application/json" });
   const a = document.createElement("a");

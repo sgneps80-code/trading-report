@@ -46,7 +46,7 @@ window.REGOLE_PREDEFINITE = [
   ["\\bOBI\\b|BRICOMAN|LEROY ?MERLIN|SCREWFIX|AGRARIA|PIANTE E FIORI|BRICO|FERRAMENTA", "Casa e utenze", "Bricolage e giardino"],
 
   // ───────────── FAMIGLIA E PERSONE ─────────────
-  ["GEBIOLA|ANNA PELLEGRINO", "Famiglia e persone", "Bonifici a familiari"],
+  ["Ben(eficiario)?: [A-Za-z]+ Gebiola|ANNA PELLEGRINO", "Famiglia e persone", "Bonifici a familiari"],
   ["Visa Direct", "Famiglia e persone", "Invii PayPal a persone"],
   ["A I S M|\\bAISM\\b|NUNZIATELLA|SAVECHILDRE|SAVE THE CHILDREN|MANAGERITALIA|EMERGENCY|UNICEF|AIRC", "Famiglia e persone", "Associazioni e donazioni"],
 
