@@ -106,10 +106,18 @@ window.REGOLE_PREDEFINITE = [
   ["GELAT|PASTICCERIA|SFOGLIAT|PANDOLCE|DOLCI|LIEVITATI", "Tempo libero", "Gelaterie e pasticcerie"],
   ["MC ?DONALD|MCDONALD|FIVE GUYS|BURGER|KEBAB|KEBAB|ICCHEBAB|ANTICO VINAIO|PIAD|FOOD COURT|AUTOGRILL|EXKI|MERCATO CENTRALE", "Tempo libero", "Fast food e street food"],
   ["RISTORA|RISTORANTE|PIZZ|OSTERIA|TRATTORIA|TAVERNA|SUSHI|SATORI|DA I DOLIO|DA I MAVO|IL MARCHESE|ALFREDO ALLA SCROFA|SOTTO PORTA|LA GIOCONDA|IL VECCHIO E IL MARE|AL FRESCO|MALGA|RIFUGIO|BAITA|FARINA & LUPPOLO|LA CARETTA|OLD STOVE|\\bPUB\\b|LOCANDA|BRACERIA|IL PIPISTRELLO|IL VECCIOLINO|MO-VIOLA|LA CAPRICCIOSA|BIANCO SPINO|BAGNO VENERE|GINESTRA ROSALIA|CASUMARO|OWAP|ECCELLENZE DELLA COSTI|SORBILLO|SERV\\.RIST|RISTORO", "Tempo libero", "Ristorazione"],
-  ["\\bBAR\\b|CAFFE|CAFFÈ|\\bCAFE\\b|PEDEVILLA|LOC\\.CAPANNUCCIA|DISTRIB|VENDING|SAMARCANDA|6645 -|SEGAFREDO|COFFEE", "Tempo libero", "Bar e caffè"],
+  ["\\bBAR\\b|CAFFE|CAFFÈ|\\bCAFE\\b|PEDEVILLA|LOC\\.CAPANNUCCIA|DISTRIB|VENDING|SAMARCANDA|6645 -|SEGAFREDO|COFFEE", "Alimentari", "Bar e caffè"],
 
   // ───────────── RESIDUI PER TIPO DI OPERAZIONE ─────────────
   ["^SEPA Direct Debit", "Casa e utenze", "Altre domiciliazioni"],
   ["^Bonifico", "Famiglia e persone", "Altri bonifici inviati", "out"],
   ["Bollettino", "Banca e imposte", "Bollettini"],
 ];
+
+/*
+ * Spese piccole: un'uscita fino a "soglia" euro che è stata classificata a mano
+ * (singolo movimento o regola personale) oppure non è riconosciuta da nessuna
+ * regola, viene messa in questa categoria. Le tue assegnazioni sopra la soglia
+ * restano valide. Per disattivare: window.SPESE_PICCOLE = null;
+ */
+window.SPESE_PICCOLE = { soglia: 10, macro: "Alimentari", det: "Bar e caffè" };

@@ -434,6 +434,11 @@ function classify(m) {
     if (!res) res = dir === "in" ? { macro: "Altre entrate", det: "Da classificare", todo: true }
                                  : { macro: "Da classificare", det: "Esercente non riconosciuto", todo: true };
   }
+  // Piccole spese: le assegnazioni manuali e i movimenti non riconosciuti fino alla
+  // soglia (regole.js → SPESE_PICCOLE) diventano automaticamente "Bar e caffè".
+  const sp = window.SPESE_PICCOLE;
+  if (sp && m.amt < 0 && -m.amt <= sp.soglia && (res.manual || res.todo))
+    res = { macro: sp.macro, det: sp.det, small: true };
   catCache.set(m.id, res);
   return res;
 }
@@ -673,7 +678,7 @@ function renderMovs() {
   box.innerHTML = `<table class="data mov"><colgroup><col class="c-btn" style="width:96px"><col class="c-date" style="width:96px"><col><col class="c-cat" style="width:28%"><col class="c-amt" style="width:120px"></colgroup>
      <thead><tr><th></th><th>Data</th><th>Descrizione</th><th class="cat">Categoria</th><th class="num">Importo</th></tr></thead><tbody>` +
     shown.map(m => { const c = classify(m);
-      const tagHtml = `<span class="tag ${c.todo ? "todo" : ""} ${c.manual ? "manual" : ""}">${esc(c.macro)} › ${esc(c.det)}</span>`;
+      const tagHtml = `<span class="tag ${c.todo ? "todo" : ""} ${c.manual ? "manual" : ""}" ${c.small ? `title="Automatico: spesa fino a ${window.SPESE_PICCOLE.soglia} €"` : ""}>${esc(c.macro)} › ${esc(c.det)}${c.small ? " ·≤" + window.SPESE_PICCOLE.soglia + "€" : ""}</span>`;
       return `<tr data-id="${attr(m.id)}"><td><button class="edit-btn" title="Cambia categoria">✎<span class="lbl"> Classifica</span></button></td><td>${m.dVal.split("-").reverse().join("/")}${/autorizz/i.test(m.st) ? '<div class="pending">in attesa</div>' : ""}</td>
       <td class="desc">${esc(merchant(m))}<small title="${attr(m.full)}">${esc(m.desc)} · ${esc(m.full)}</small><span class="tag-m">${tagHtml}</span></td>
       <td class="cat">${tagHtml}</td>
@@ -697,6 +702,7 @@ function renderRules() {
 function renderLists() {
   const macros = new Set(), dets = new Set();
   (window.REGOLE_PREDEFINITE || []).forEach(r => { macros.add(r[1]); dets.add(r[2]); });
+  if (window.SPESE_PICCOLE) { macros.add(SPESE_PICCOLE.macro); dets.add(SPESE_PICCOLE.det); }
   db.rules.forEach(r => { macros.add(r.macro); dets.add(r.det); });
   Object.values(db.overrides).forEach(r => { macros.add(r.macro); dets.add(r.det); });
   document.getElementById("macroList").innerHTML = [...macros].sort().map(m => `<option value="${attr(m)}">`).join("");
