@@ -12,7 +12,7 @@ Mettere questi 3 file nella stessa cartella e aprire `index.html` con il browser
 - **Carica estratto conto**: scegli (o trascina sulla pagina) l'export `.xlsx` della banca. Puoi ricaricare file che si sovrappongono: i movimenti già presenti vengono ignorati e si aggiungono solo quelli nuovi.
 - **Periodo**: clic su mesi singoli, sull'anno (anno intero) o Maiusc+clic per un intervallo. Ci sono anche le scorciatoie rapide.
 - **Torta e tabella**: clic su una macro area (es. *Tempo libero*) per vedere il dettaglio (*Ristorazione*, *Bar e caffè*, *Cinema e spettacoli*…), poi clic su un dettaglio per vedere i suoi movimenti.
-- **✎ su un movimento**: cambia la categoria solo per quel movimento, oppure crea una regola ("tutti i movimenti che contengono…") valida anche per i file futuri.
+- **«✎ Classifica» (o clic sulla riga di un movimento)**: cambia la categoria solo per quel movimento, oppure crea una regola ("tutti i movimenti che contengono…") valida anche per i file futuri.
 - **Solo da classificare**: mostra i movimenti che nessuna regola ha riconosciuto.
 
 ## Dove sono salvati i dati

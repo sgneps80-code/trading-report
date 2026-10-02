@@ -126,12 +126,17 @@ table.data tfoot td { font-weight: 700; border-bottom: 0; }
 .mov-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .mov-scroll { max-height: 520px; overflow: auto; }
 .mov td { font-size: 13px; }
-.mov .desc { max-width: 420px; }
-.mov .desc small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
-.tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--surface-2); color: var(--text-2); white-space: nowrap; }
+.mov { table-layout: fixed; }
+.mov .desc { overflow-wrap: anywhere; }
+.mov .desc small { display: block; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mov tbody tr { cursor: pointer; }
+.mov tbody tr:hover { background: var(--surface-2); }
+.tag { display: inline-block; font-size: 12px; padding: 1px 7px; border-radius: 10px; background: var(--surface-2); color: var(--text-2); overflow-wrap: anywhere; }
 .tag.todo { background: transparent; border: 1px dashed var(--neg); color: var(--neg); }
+.mov .tag-m { display: none; }
 .tag.manual::after { content: " ✎"; }
-.edit-btn { padding: 2px 8px; font-size: 12px; }
+.edit-btn { padding: 3px 9px; font-size: 12px; white-space: nowrap; }
+.mov .edit-btn { border-color: var(--accent); color: var(--accent); }
 .pending { color: var(--muted); font-size: 11px; }
 
 /* dialog */
@@ -155,8 +160,15 @@ details summary { cursor: pointer; font-weight: 600; }
   .kpi .val { font-size: 17px; }
   .col-bar { display: none; }
   .m { width: 40px; }
-  .mov .desc, .mov .desc small { max-width: 160px; }
-  .mov .tag { white-space: normal; }
+  .mov .c-btn { width: 40px !important; }
+  .mov .c-date { width: 64px !important; }
+  .mov .c-cat { width: 0 !important; }
+  .mov .c-amt { width: 84px !important; }
+  .mov th.cat, .mov td.cat { display: none; }
+  .mov .tag-m { display: block; margin-top: 3px; }
+  .mov .edit-btn .lbl { display: none; }
+  .mov td { padding: 7px 4px; }
+  .mov td:nth-child(2) { font-size: 11px; }
 }
 </style>
 </head>
@@ -230,7 +242,7 @@ details summary { cursor: pointer; font-weight: 600; }
   <section class="card">
     <details id="rulesDetails">
       <summary>Regole personali di classificazione (<span id="ruleCount">0</span>)</summary>
-      <p class="sub">Hanno la precedenza sulle regole predefinite (file <code>regole.js</code>). Si creano dal pulsante ✎ accanto a ogni movimento.</p>
+      <p class="sub">Hanno la precedenza sulle regole predefinite (file <code>regole.js</code>). Si creano dal pulsante «✎ Classifica» accanto a ogni movimento.</p>
       <div class="rules-list" id="rulesBox"></div>
     </details>
   </section>
@@ -420,7 +432,7 @@ function classify(m) {
       if (r.a.test(text) || r.b.test(flat)) { res = { macro: r.macro, det: r.det, manual: !!r.user }; break; }
     }
     if (!res) res = dir === "in" ? { macro: "Altre entrate", det: "Da classificare", todo: true }
-                                 : { macro: "Da classificare", det: merchant(m), todo: true };
+                                 : { macro: "Da classificare", det: "Esercente non riconosciuto", todo: true };
   }
   catCache.set(m.id, res);
   return res;
@@ -658,15 +670,17 @@ function renderMovs() {
   const box = document.getElementById("movBox");
   if (!movs.length) { box.innerHTML = `<div class="empty">Nessun movimento.</div>`; return; }
   const shown = movs.slice(0, 800);
-  box.innerHTML = `<table class="data mov"><thead><tr><th>Data</th><th>Descrizione</th><th>Categoria</th><th class="num">Importo</th><th></th></tr></thead><tbody>` +
+  box.innerHTML = `<table class="data mov"><colgroup><col class="c-btn" style="width:96px"><col class="c-date" style="width:96px"><col><col class="c-cat" style="width:28%"><col class="c-amt" style="width:120px"></colgroup>
+     <thead><tr><th></th><th>Data</th><th>Descrizione</th><th class="cat">Categoria</th><th class="num">Importo</th></tr></thead><tbody>` +
     shown.map(m => { const c = classify(m);
-      return `<tr><td>${m.dVal.split("-").reverse().join("/")}${/autorizz/i.test(m.st) ? '<div class="pending">in attesa</div>' : ""}</td>
-      <td class="desc">${esc(merchant(m))}<small title="${attr(m.full)}">${esc(m.desc)} · ${esc(m.full)}</small></td>
-      <td><span class="tag ${c.todo ? "todo" : ""} ${c.manual ? "manual" : ""}">${esc(c.macro)} › ${esc(c.det)}</span></td>
-      <td class="num ${m.amt > 0 ? "pos" : ""}">${fmt.format(m.amt)}</td>
-      <td><button class="edit-btn" data-id="${attr(m.id)}" title="Cambia categoria">✎</button></td></tr>`; }).join("") +
+      const tagHtml = `<span class="tag ${c.todo ? "todo" : ""} ${c.manual ? "manual" : ""}">${esc(c.macro)} › ${esc(c.det)}</span>`;
+      return `<tr data-id="${attr(m.id)}"><td><button class="edit-btn" title="Cambia categoria">✎<span class="lbl"> Classifica</span></button></td><td>${m.dVal.split("-").reverse().join("/")}${/autorizz/i.test(m.st) ? '<div class="pending">in attesa</div>' : ""}</td>
+      <td class="desc">${esc(merchant(m))}<small title="${attr(m.full)}">${esc(m.desc)} · ${esc(m.full)}</small><span class="tag-m">${tagHtml}</span></td>
+      <td class="cat">${tagHtml}</td>
+      <td class="num ${m.amt > 0 ? "pos" : ""}">${fmt.format(m.amt)}</td></tr>`; }).join("") +
     `</tbody></table>` + (movs.length > shown.length ? `<div class="hint">Mostrati ${shown.length} di ${movs.length}: usa la ricerca per restringere.</div>` : "");
-  box.querySelectorAll(".edit-btn").forEach(b => b.onclick = () => openEdit(b.dataset.id));
+  // clic sul pulsante o in qualunque punto della riga apre la classificazione
+  box.querySelectorAll("tbody tr").forEach(tr => tr.onclick = () => openEdit(tr.dataset.id));
 }
 
 function renderRules() {
