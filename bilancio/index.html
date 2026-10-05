@@ -446,7 +446,8 @@ function classify(m) {
   const ov = db.overrides[m.id];
   if (ov) res = { macro: ov.macro, det: ov.det, manual: true };
   else {
-    const text = m.desc + " | " + m.full, flat = text.replace(/\s+/g, "");
+    // la coda "Carta N… Nessuna Commissione / Num. Rif." non dice nulla sull'esercente
+    const text = m.desc + " | " + m.full.replace(/\s+Carta N[\s\S]*$/i, ""), flat = text.replace(/\s+/g, "");
     const dir = m.amt >= 0 ? "in" : "out";
     for (const r of compiled) {
       if (r.sign && r.sign !== dir) continue;

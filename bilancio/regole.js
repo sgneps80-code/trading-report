@@ -27,12 +27,14 @@ window.REGOLE_PREDEFINITE = [
 
   // ───────────── BANCA, TASSE, INVESTIMENTI ─────────────
   ["Compravendita Titoli", "Investimenti", "Acquisto titoli", "out"],
+  ["COINBASE|BINANCE|BITPANDA", "Investimenti", "Criptovalute"],
   ["Canone Mensile", "Banca e imposte", "Canone conto"],
   ["Imposta bollo|Imposta di bollo", "Banca e imposte", "Imposta di bollo"],
   ["Capit\\.GAIN|Ritenuta|Riten\\.", "Banca e imposte", "Tasse su investimenti"],
-  ["Commiss|Comm\\.Prel|Spese Sepa|Recupero spese", "Banca e imposte", "Commissioni bancarie"],
+  ["^(Commiss|Comm\\.Prel|Spese Sepa|Recupero spese)", "Banca e imposte", "Commissioni bancarie"],
   ["Prelievo Bancomat|Pr\\.FinecoCard ATM|Prelevamento", "Contanti", "Prelievi bancomat"],
-  ["SPID|POSTE ITALIANE", "Banca e imposte", "Poste e servizi PA"],
+  ["STUDIO LEGALE|Consulenza Avv|AVVOCAT|NOTAI|COMMERCIALISTA|STUDIO LICONTI", "Servizi professionali", "Avvocati, notai e consulenti", "out"],
+  ["SPID|POSTE ITALIANE|ANAGRAFE|UFFICIO POSTALE", "Banca e imposte", "Poste e servizi PA"],
   ["PAGOPA|PAG PUB AMM|UNIONE COMUNAL|CONSORZIO DI B|AGENZIA ENTRATE|F24", "Banca e imposte", "Imposte e tributi"],
 
   // ───────────── CASA E UTENZE ─────────────
@@ -63,20 +65,21 @@ window.REGOLE_PREDEFINITE = [
   // ───────────── SPORT (figli e personale) ─────────────
   ["F\\.C\\. SCANDICCI|Scandicci Calcio|POLISPORT|SESTESE CALCIO|UNIONE SPORTIVA|GRUPPO SPORTIVO|Sport Rotell|VIRTUS|CALCIO|\\bASD\\b", "Sport", "Società sportive e iscrizioni"],
   ["PISCIN|OLYMPUS CLUB|PALESTRA|FITNESS", "Sport", "Piscina e palestra"],
-  ["DECATHLON|NENCINI SPORT|UNIVERSO SPORT|K-SPORT|FAN SHOP|CISALFA|\\bSPORT", "Sport", "Abbigliamento e attrezzatura"],
+  ["DECATHLON|NENCINI SPORT|UNIVERSO SPORT|K-SPORT|FAN SHOP|ROLLERMANIA|PATTINOMANIA|CISALFA|\\bSPORT", "Sport", "Abbigliamento e attrezzatura"],
 
   // ───────────── TRASPORTI ─────────────
   ["UNIPOL ?TECH|ASPIT|AUTOSTRAD|FASTPAY|SAT COLLESALVETTI|TELEPASS", "Trasporti", "Pedaggi autostradali"],
-  ["TAMOIL|TAMO IL|\\bENI\\b|\\bQ8\\b|\\bIP\\b|B FUEL|CARBURANT|DISTR IP|\\bADS\\b|STAZIONE DI SERVIZIO|NUOVA SIDAP|PV\\d{3,}|\\bESSO\\b|AGIP", "Trasporti", "Carburante"],
+  ["TAMOIL|TAMO IL|\\bENI\\b|\\bQ8\\b|\\bIP\\b|B FUEL|CARBURANT|DISTR IP|\\bADS\\b|STAZIONE DI SERVIZIO|NUOVA SIDAP|ENI\\d{3,}|PV\\d{3,}|\\bESSO\\b|AGIP", "Trasporti", "Carburante"],
   ["EASYPARK|PARCHEGG|PARKING|GARAGE|PARCOMETR|ANM SPA|\\bPARK\\b|TANA DIREZ", "Trasporti", "Parcheggi"],
-  ["TAXI|G7 CLICHY", "Trasporti", "Taxi"],
-  ["A\\.T\\.A\\.C|\\bATAC\\b|AUTOLINEE|TRENITALIA|\\bITALO\\b|STAZIONE|APP TORINO|AV ITALIA|TICKET ATM|METRO", "Trasporti", "Mezzi pubblici e treni"],
-  ["SOS AUTO|GOMM|OFFICINA|CARROZZ|AUTORICAMBI", "Trasporti", "Manutenzione auto"],
+  ["TAXI|G7 CLICHY|UBER", "Trasporti", "Taxi"],
+  ["A\\.T\\.A\\.C|\\bATAC\\b|AUTOLINEE|TRENITALIA|\\bITALO\\b|ITALOTRENO|STAZIONE|APP TORINO|AV ITALIA|TICKET ATM|METRO", "Trasporti", "Mezzi pubblici e treni"],
+  ["SOS AUTO|COMAUTO|GOMM|OFFICINA|CARROZZ|AUTORICAMBI", "Trasporti", "Manutenzione auto"],
   ["ALLIANZ|UNIPOL|ASSICURA|GENERALI|PRIMA\\.IT", "Trasporti", "Assicurazione auto"],
 
   // ───────────── ABBONAMENTI E DIGITALE ─────────────
+  ["EASYJET|RYANAIR|LUFTHAVN|AEROPORT|ALITALIA|\\bITA AIRWAYS|VUELING|WIZZ", "Viaggi e vacanze", "Voli e aeroporti"],
   ["NETFLIX|DISNEY|PAYPAL \\*NOW|DAZN|YOUTUBE|SPOTIFY|PRIME VIDEO", "Abbonamenti", "Streaming TV e musica"],
-  ["ANTHROPIC|CLAUDE|GOOGLE|CHESS COM|APPLE\\.COM|MICROSOFT|OPENAI", "Abbonamenti", "App e software"],
+  ["ANTHROPIC|CLAUDE|GOOGLE|CHESS COM|LINKEDIN|APPLE\\.COM|MICROSOFT|OPENAI", "Abbonamenti", "App e software"],
 
   // ───────────── VIAGGI E VACANZE ─────────────
   ["HOTEL|AIRBNB|BOOKING|Pappasole spa|PENSIONE|NHOW|AVISIO PARK|SUAN PARK|BORGO PETRIOLO|RESIDENCE|SOC AGRICOLA|AGRITURISMO", "Viaggi e vacanze", "Alloggi"],
@@ -87,7 +90,7 @@ window.REGOLE_PREDEFINITE = [
   ["AMAZON|AMZN", "Shopping", "Amazon"],
   ["PCCOMPONENT|EPRICE|SMARTBUGS|ZALANDO|SHEIN|TEMU|EBAY", "Shopping", "Altri acquisti online"],
   ["EURONICS|MEDIAWORLD|UNIEURO|TRONY|EXPERT", "Shopping", "Elettronica"],
-  ["BOGGI|TIMBERLAND|TEZENIS|ALCOTT|CALZATURE|UPIM|GUTTERIDGE|MILLEPIEDI|\\bOVS\\b|ZARA|H&M|BENETTON|INTIMISSIMI", "Shopping", "Abbigliamento e scarpe"],
+  ["PRADA (SPA )?\\d+|VFINTERNATI|BOGGI|TIMBERLAND|TEZENIS|ALCOTT|CALZATURE|UPIM|GUTTERIDGE|MILLEPIEDI|\\bOVS\\b|ZARA|H&M|BENETTON|INTIMISSIMI", "Shopping", "Abbigliamento e scarpe"],
   ["TIGER STORE|ACTION|FLYING TIGER", "Shopping", "Casalinghi e varie"],
 
   // ───────────── CURA DELLA PERSONA ─────────────
@@ -98,14 +101,14 @@ window.REGOLE_PREDEFINITE = [
   ["CASEIFICIO|MACELL|MASTROCICCIAIO|FORNO|PANIFIC|ORTOFRUTT|PESCHERIA|SALUMERIA", "Alimentari", "Botteghe e specialità"],
 
   // ───────────── TEMPO LIBERO ─────────────
-  ["GARDALAND|STANDI|MIRABILANDIA|ACQUAPARK|AQUAFAN|LUNAPARK", "Tempo libero", "Parchi divertimento"],
+  ["LEGOLAND|LEGO HOUSE|GARDALAND|STANDI|MIRABILANDIA|ACQUAPARK|AQUAFAN|LUNAPARK", "Tempo libero", "Parchi divertimento"],
   ["CINEMA|\\bUCI\\b|THE SPACE|TICKETONE|TICKETMASTER|TEATRO|PARIS OPERA|CONCERT", "Tempo libero", "Cinema e spettacoli"],
   ["MUSEO|MUSEI|UFFIZI|COLOSSEO|OPERA DELLA PRIMAZIALE|MOSTRA", "Tempo libero", "Musei e cultura"],
   ["5 RIONI|ASSOCIAZIONE 5|CASA DEL POPOLO|SAGRA|PRO LOCO", "Tempo libero", "Feste ed eventi"],
   ["SALA GIOCHI|NEW GAMES|LUDOTECA|BOWLING", "Tempo libero", "Giochi e svago"],
   ["GELAT|PASTICCERIA|SFOGLIAT|PANDOLCE|DOLCI|LIEVITATI", "Tempo libero", "Gelaterie e pasticcerie"],
-  ["MC ?DONALD|MCDONALD|FIVE GUYS|BURGER|KEBAB|KEBAB|ICCHEBAB|ANTICO VINAIO|PIAD|FOOD COURT|AUTOGRILL|EXKI|MERCATO CENTRALE", "Tempo libero", "Fast food e street food"],
-  ["RISTORA|RISTORANTE|PIZZ|OSTERIA|TRATTORIA|TAVERNA|SUSHI|SATORI|DA I DOLIO|DA I MAVO|IL MARCHESE|ALFREDO ALLA SCROFA|SOTTO PORTA|LA GIOCONDA|IL VECCHIO E IL MARE|AL FRESCO|MALGA|RIFUGIO|BAITA|FARINA & LUPPOLO|LA CARETTA|OLD STOVE|\\bPUB\\b|LOCANDA|BRACERIA|IL PIPISTRELLO|IL VECCIOLINO|MO-VIOLA|LA CAPRICCIOSA|BIANCO SPINO|BAGNO VENERE|GINESTRA ROSALIA|CASUMARO|OWAP|ECCELLENZE DELLA COSTI|SORBILLO|SERV\\.RIST|RISTORO", "Tempo libero", "Ristorazione"],
+  ["MC ?DONALD|MCDONALD|FIVE GUYS|BURGER|KEBAB|KEBAB|ICCHEBAB|ANTICO VINAIO|PIAD|FOOD COURT|FOODTRUCK|AUTOGRILL|EXKI|MERCATO CENTRALE", "Tempo libero", "Fast food e street food"],
+  ["RISTORA|RISTORANTE|OLD WILD WEST|ROADHOUSE|\\bRIST\\b|FIASCHETTERIA|PIZZ|OSTERIA|TRATTORIA|TAVERNA|SUSHI|SATORI|DA I DOLIO|DA I MAVO|IL MARCHESE|ALFREDO ALLA SCROFA|SOTTO PORTA|LA GIOCONDA|IL VECCHIO E IL MARE|AL FRESCO|MALGA|RIFUGIO|BAITA|FARINA & LUPPOLO|LA CARETTA|OLD STOVE|\\bPUB\\b|LOCANDA|BRACERIA|IL PIPISTRELLO|IL VECCIOLINO|MO-VIOLA|LA CAPRICCIOSA|BIANCO SPINO|BAGNO VENERE|GINESTRA ROSALIA|CASUMARO|OWAP|ECCELLENZE DELLA COSTI|SORBILLO|SERV\\.RIST|RISTORO", "Tempo libero", "Ristorazione"],
   ["\\bBAR\\b|CAFFE|CAFFÈ|\\bCAFE\\b|PEDEVILLA|LOC\\.CAPANNUCCIA|DISTRIB|VENDING|SAMARCANDA|6645 -|SEGAFREDO|COFFEE", "Alimentari", "Bar e caffè"],
 
   // ───────────── RESIDUI PER TIPO DI OPERAZIONE ─────────────
