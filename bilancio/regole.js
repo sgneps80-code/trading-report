@@ -66,7 +66,7 @@ window.REGOLE_PREDEFINITE = [
   ["DECATHLON|NENCINI SPORT|UNIVERSO SPORT|K-SPORT|FAN SHOP|CISALFA|\\bSPORT", "Sport", "Abbigliamento e attrezzatura"],
 
   // ───────────── TRASPORTI ─────────────
-  ["ASPIT|AUTOSTRAD|FASTPAY|SAT COLLESALVETTI|TELEPASS", "Trasporti", "Pedaggi autostradali"],
+  ["UNIPOL ?TECH|ASPIT|AUTOSTRAD|FASTPAY|SAT COLLESALVETTI|TELEPASS", "Trasporti", "Pedaggi autostradali"],
   ["TAMOIL|TAMO IL|\\bENI\\b|\\bQ8\\b|\\bIP\\b|B FUEL|CARBURANT|DISTR IP|\\bADS\\b|STAZIONE DI SERVIZIO|NUOVA SIDAP|PV\\d{3,}|\\bESSO\\b|AGIP", "Trasporti", "Carburante"],
   ["EASYPARK|PARCHEGG|PARKING|GARAGE|PARCOMETR|ANM SPA|\\bPARK\\b|TANA DIREZ", "Trasporti", "Parcheggi"],
   ["TAXI|G7 CLICHY", "Trasporti", "Taxi"],
