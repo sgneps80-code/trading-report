@@ -456,6 +456,7 @@ function classify(m) {
     if (!res) res = dir === "in" ? { macro: "Altre entrate", det: "Da classificare", todo: true }
                                  : { macro: "Da classificare", det: "Esercente non riconosciuto", todo: true };
   }
+  res = rename(res);
   // Piccole spese: le assegnazioni manuali e i movimenti non riconosciuti fino alla
   // soglia (regole.js → SPESE_PICCOLE) diventano automaticamente "Bar e caffè".
   const sp = window.SPESE_PICCOLE;
@@ -463,6 +464,11 @@ function classify(m) {
     res = { macro: sp.macro, det: sp.det, small: true };
   catCache.set(m.id, res);
   return res;
+}
+// Converte i nomi di categoria delle versioni precedenti in quelli attuali.
+function rename(c) {
+  const n = (window.CATEGORIE_RINOMINATE || {})[c.macro + " › " + c.det];
+  return n ? { ...c, macro: n[0], det: n[1] } : c;
 }
 function merchant(m) {
   const s = m.full;
@@ -735,7 +741,7 @@ function renderRules() {
   const box = document.getElementById("rulesBox");
   if (!db.rules.length) { box.innerHTML = `<div class="sub">Nessuna regola personale.</div>`; return; }
   box.innerHTML = `<table class="data"><thead><tr><th>Se il testo contiene</th><th>Categoria</th><th>Tipo</th><th></th></tr></thead><tbody>` +
-    db.rules.map((r, i) => `<tr><td><code>${esc(r.key)}</code></td><td>${esc(r.macro)} › ${esc(r.det)}</td><td>${r.sign === "in" ? "Entrate" : r.sign === "out" ? "Uscite" : "Tutti"}</td>
+    db.rules.map((r, i) => `<tr><td><code>${esc(r.key)}</code></td><td>${esc(rename(r).macro)} › ${esc(rename(r).det)}</td><td>${r.sign === "in" ? "Entrate" : r.sign === "out" ? "Uscite" : "Tutti"}</td>
       <td class="num"><button class="edit-btn btn-danger" data-del="${i}">Elimina</button></td></tr>`).join("") + `</tbody></table>`;
   box.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
     db.rules.splice(+b.dataset.del, 1); save(); compileRules(); renderAll();
@@ -745,8 +751,7 @@ function renderLists() {
   const macros = new Set(), dets = new Set();
   (window.REGOLE_PREDEFINITE || []).forEach(r => { macros.add(r[1]); dets.add(r[2]); });
   if (window.SPESE_PICCOLE) { macros.add(SPESE_PICCOLE.macro); dets.add(SPESE_PICCOLE.det); }
-  db.rules.forEach(r => { macros.add(r.macro); dets.add(r.det); });
-  Object.values(db.overrides).forEach(r => { macros.add(r.macro); dets.add(r.det); });
+  db.rules.concat(Object.values(db.overrides)).map(rename).forEach(r => { macros.add(r.macro); dets.add(r.det); });
   document.getElementById("macroList").innerHTML = [...macros].sort().map(m => `<option value="${attr(m)}">`).join("");
   document.getElementById("detList").innerHTML = [...dets].sort().map(m => `<option value="${attr(m)}">`).join("");
 }
