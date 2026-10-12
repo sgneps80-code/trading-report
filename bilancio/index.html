@@ -125,6 +125,8 @@ table.data tfoot td { font-weight: 700; border-bottom: 0; }
 /* movimenti */
 .mov-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
 .mov-scroll { max-height: 520px; overflow: auto; }
+@keyframes flash { from { background: var(--accent); color: #fff; } to { background: transparent; } }
+#movTitle.flash { animation: flash 1.2s ease-out; border-radius: 6px; }
 .mov-filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 10px; }
 .mov-filters .seg button { padding: 5px 12px; font-size: 13px; }
 .mov-sum { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--text-2); padding: 8px 10px; background: var(--surface-2); border-radius: 8px; margin-bottom: 10px; font-variant-numeric: tabular-nums; }
@@ -242,8 +244,8 @@ details summary { cursor: pointer; font-weight: 600; }
     <div class="mov-head">
       <h2 style="margin:0" id="movTitle">Movimenti</h2>
       <div class="actions">
-        <input type="search" id="search" placeholder="Cerca nei movimenti…">
-        <label class="sub"><input type="checkbox" id="onlyTodo"> Solo da classificare</label>
+        <input type="search" id="search" autocomplete="off" placeholder="Cerca nei movimenti…">
+        <label class="sub"><input type="checkbox" id="onlyTodo" autocomplete="off"> Solo da classificare</label>
       </div>
     </div>
     <div class="mov-filters">
@@ -307,7 +309,7 @@ details summary { cursor: pointer; font-weight: 600; }
 </dialog>
 <datalist id="macroList"></datalist>
 <datalist id="detList"></datalist>
-<div class="ver">Versione pagina 2026-10-12</div>
+<div class="ver">Versione pagina 2026-10-12.2</div>
 <div class="tip" id="tip"></div>
 <div class="toast" id="toast"></div>
 
@@ -657,11 +659,20 @@ function renderAnalysis() {
   });
 }
 function drill(name) {
+  // il clic sul grafico/tabella decide la lista: tolgo filtri rimasti attivi
   movFilter = "chart";
+  document.getElementById("onlyTodo").checked = false;
+  document.getElementById("search").value = "";
   if (!ui.macro) { ui.macro = name; ui.det = null; }
   else ui.det = ui.det === name ? null : name;
   renderAnalysis(); renderMovs();
   if (ui.det) document.getElementById("movTitle").scrollIntoView({ behavior: "smooth", block: "start" });
+  else flashList();
+}
+// evidenzia brevemente la lista quando cambia per un clic sulla macro area
+function flashList() {
+  const t = document.getElementById("movTitle");
+  t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash");
 }
 function highlight(name) {
   const box = document.getElementById("pieBox");
