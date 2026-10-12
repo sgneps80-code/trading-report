@@ -26,6 +26,10 @@
  * Vince la PRIMA regola che corrisponde: metti le più specifiche in alto.
  * Le regole personali create dalla pagina hanno sempre la precedenza su queste.
  */
+// Deve coincidere con la versione attesa da index.html: se la pagina segnala
+// "regole.js non aggiornato", questo file nella cartella è quello vecchio.
+window.REGOLE_VERSIONE = "2026-10-12";
+
 window.REGOLE_PREDEFINITE = [
   // ───────────── ENTRATE ─────────────
   ["^Stipendio", "Lavoro", "Stipendio", "in"],

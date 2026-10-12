@@ -152,7 +152,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .radio { display: flex; gap: 6px; align-items: flex-start; color: var(--text); }
 .radio input { margin-top: 4px; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-.rules-list { max-height: 260px; overflow: auto; }
+.rules-list { max-height: 360px; overflow: auto; }
+.alert { background: #fdecea; color: #8a1c1c; border: 1px solid #f3b7b0; border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+.alert b { color: inherit; }
+.ver { color: var(--muted); font-size: 12px; text-align: center; margin-top: 8px; }
+#customBox select { max-width: 100%; }
 details summary { cursor: pointer; font-weight: 600; }
 .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--surface); padding: 10px 16px; border-radius: 8px; display: none; z-index: 20; max-width: calc(100vw - 32px); }
 .drop { outline: 3px dashed var(--accent); outline-offset: -8px; }
@@ -193,6 +197,8 @@ details summary { cursor: pointer; font-weight: 600; }
       <button id="btnReset" class="btn-ghost btn-danger">Cancella dati</button>
     </div>
   </header>
+
+  <div class="alert" id="verAlert" hidden></div>
 
   <section class="card" id="periodCard">
     <div class="period-head">
@@ -259,6 +265,15 @@ details summary { cursor: pointer; font-weight: 600; }
     <div class="mov-scroll" id="movBox"></div>
   </section>
 
+  <section class="card" id="customCard" hidden>
+    <details id="customDetails" open>
+      <summary>Categorie personali da riordinare (<span id="customCount">0</span>)</summary>
+      <p class="sub">Queste categorie le hai create tu con «✎ Classifica» e non fanno parte dell'elenco standard.
+        Scegli in quale categoria standard farle confluire e premi «Unisci»: tutte le tue assegnazioni e regole con quel nome vengono spostate.</p>
+      <div class="rules-list" id="customBox"></div>
+    </details>
+  </section>
+
   <section class="card">
     <details id="rulesDetails">
       <summary>Regole personali di classificazione (<span id="ruleCount">0</span>)</summary>
@@ -292,6 +307,7 @@ details summary { cursor: pointer; font-weight: 600; }
 </dialog>
 <datalist id="macroList"></datalist>
 <datalist id="detList"></datalist>
+<div class="ver">Versione pagina 2026-10-12</div>
 <div class="tip" id="tip"></div>
 <div class="toast" id="toast"></div>
 
@@ -566,7 +582,7 @@ function groupBy(movs, keyFn) {
 /* ================= Render ================= */
 function renderAll() {
   compiledOnce();
-  renderStatus(); renderGrid(); renderKpis(); renderAnalysis(); renderMovs(); renderRules(); renderLists();
+  renderVersion(); renderStatus(); renderGrid(); renderKpis(); renderAnalysis(); renderMovs(); renderRules(); renderCustom(); renderLists();
 }
 let _compiled = false;
 function compiledOnce() { if (!_compiled) { compileRules(); _compiled = true; } }
@@ -745,6 +761,55 @@ function renderRules() {
       <td class="num"><button class="edit-btn btn-danger" data-del="${i}">Elimina</button></td></tr>`).join("") + `</tbody></table>`;
   box.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
     db.rules.splice(+b.dataset.del, 1); save(); compileRules(); renderAll();
+  });
+}
+/* ================= Versione e categorie personali ================= */
+const VERSIONE_ATTESA = "2026-10-12";
+function renderVersion() {
+  const a = document.getElementById("verAlert");
+  const v = window.REGOLE_VERSIONE;
+  if (v === VERSIONE_ATTESA) { a.hidden = true; return; }
+  a.hidden = false;
+  a.innerHTML = `<b>Il file regole.js nella cartella non è aggiornato</b> (trovato: ${esc(v || "versione precedente")}, atteso: ${VERSIONE_ATTESA}).
+    Le categorie mostrate sono quelle vecchie. Controlla che nella cartella ci sia un solo <code>regole.js</code>
+    (il browser può aver salvato il nuovo come <code>regole (1).js</code>: in quel caso elimina il vecchio e rinomina il nuovo), poi premi Ctrl+F5.`;
+}
+const catKey = c => c.macro + " › " + c.det;
+function standardCats() {
+  const set = new Set((window.REGOLE_PREDEFINITE || []).map(r => r[1] + " › " + r[2]));
+  if (window.SPESE_PICCOLE) set.add(SPESE_PICCOLE.macro + " › " + SPESE_PICCOLE.det);
+  return set;
+}
+function renderCustom() {
+  const std = standardCats();
+  const used = new Map();
+  for (const m of db.movs) {
+    const c = classify(m); if (c.todo) continue;
+    const k = catKey(c); if (std.has(k)) continue;
+    const u = used.get(k) || { n: 0, tot: 0 }; u.n++; u.tot += Math.abs(m.amt); used.set(k, u);
+  }
+  // anche categorie di regole/assegnazioni che oggi non toccano movimenti
+  db.rules.concat(Object.values(db.overrides)).map(rename).forEach(r => { const k = catKey(r); if (!std.has(k) && !used.has(k)) used.set(k, { n: 0, tot: 0 }); });
+  const card = document.getElementById("customCard");
+  document.getElementById("customCount").textContent = used.size;
+  card.hidden = !used.size;
+  if (!used.size) return;
+  const opts = [...std].sort().map(k => `<option value="${attr(k)}">${esc(k)}</option>`).join("");
+  const rows = [...used.entries()].sort((a, b) => b[1].tot - a[1].tot);
+  document.getElementById("customBox").innerHTML = `<table class="data"><thead><tr><th>Categoria personale</th><th class="num">Mov.</th><th class="num">Importo</th><th>Unisci in</th><th></th></tr></thead><tbody>` +
+    rows.map(([k, u], i) => `<tr><td>${esc(k)}</td><td class="num">${u.n}</td><td class="num">${fmt.format(u.tot)}</td>
+      <td><select data-i="${i}"><option value="">— scegli —</option>${opts}</select></td>
+      <td class="num"><button class="edit-btn" data-merge="${i}">Unisci</button></td></tr>`).join("") + `</tbody></table>`;
+  document.querySelectorAll("#customBox [data-merge]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.merge, from = rows[i][0];
+    const to = document.querySelector(`#customBox select[data-i="${i}"]`).value;
+    if (!to) { toast("Scegli prima la categoria in cui unirla."); return; }
+    const [macro, det] = to.split(" › ");
+    let n = 0;
+    const fix = r => { if (catKey(rename(r)) === from) { r.macro = macro; r.det = det; n++; } };
+    db.rules.forEach(fix); Object.values(db.overrides).forEach(fix);
+    save(); compileRules(); renderAll();
+    toast(`"${from}" unita in "${to}" (${n} assegnazioni/regole aggiornate).`);
   });
 }
 function renderLists() {
