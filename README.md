@@ -139,3 +139,87 @@ meglio di un falso segnale.
 
 Questo repo contiene dati finanziari personali (quantità, prezzi, ISIN) ed è
 pensato per restare **privato**.
+
+## Analisi tecnica per Claude (file .md)
+
+Sezione **🔬 Analisi tecnica per Claude** della pagina, sopra "Sincronizza
+dati personali". Con un clic genera un file `.md` con tutti i dati tecnici
+di uno strumento (o dell'intero portafoglio), da caricare in una chat con
+Claude: indicatori con le stesse formule di TradingView, struttura, livelli,
+gap, figure, statistiche storiche, strumenti collegati, eventi, posizione e,
+in modalità Titolo, i dati grezzi in CSV. Nessun dato stimato: ciò che
+manca è scritto "n.d." con il motivo.
+
+### Come si avvia
+
+1. Apri la pagina del report ed entra con la password.
+2. La prima volta: in "Sincronizza dati personali" devono esserci utente,
+   repository e token GitHub (gli stessi già usati per caricare il dossier).
+3. **📄 Titolo**: scrivi il simbolo Yahoo (es. `SAN.PA`) e premi Titolo,
+   oppure premi 📄 sulla riga della watchlist. File completo con dati grezzi.
+4. **📚 Portafoglio**: tutte le righe della watchlist (posizioni comprese),
+   solo sintesi, senza dati grezzi.
+5. Attendi 1-3 minuti senza chiudere la pagina: il file viene generato su
+   GitHub Actions e scaricato in automatico.
+
+### Dove finisce il file
+
+Nella **cartella Download predefinita del browser**, con nome
+`analisi_<TICKER>_<AAAA-MM-GG_HHMM>.md` oppure
+`analisi_PORTAFOGLIO_<AAAA-MM-GG_HHMM>.md` (ora italiana).
+
+Se il browser chiede ogni volta dove salvare:
+- **Chrome**: Impostazioni → Download → disattiva "Chiedi dove salvare ciascun file prima di scaricarlo".
+- **Edge**: Impostazioni → Download → disattiva "Chiedi cosa fare con ogni download" / "Chiedi dove salvare ogni file".
+- **Firefox**: Impostazioni → Generale → File e applicazioni → Download → scegli "Salva i file in: Download" invece di "Chiedi sempre dove salvare i file".
+
+### Come si aggiunge un titolo
+
+- **＋ Aggiungi strumento** e compila la riga. Il simbolo è quello di Yahoo
+  Finance: `ISP.MI` (Borsa Italiana ed Euronext Growth Milan), `SAN.PA`
+  (Parigi), `SNY` (USA), `EURUSD=X` (cambio), `GC=F` (oro, future COMEX in USD).
+- **Tipo** decide la compensabilità con lo zainetto fiscale (sì per azioni,
+  ETC, obbligazioni, certificati; no per le plusvalenze degli ETF UCITS).
+- **Benchmark** vuoto = `FTSEMIB.MI` per `.MI`, `^FCHI` per `.PA`, `^GSPC` per gli USA.
+- **Collegati**: `SNY adr 0.5 EURUSD=X` (ADR: 2 ADR = 1 azione → 0.5 azioni
+  per ADR) oppure `GC=F sottostante - EURUSD=X` (ETC oro). Più voci separate da `;`.
+- Quantità, carico, stop, target, uscita: facoltativi. Liquidità del conto in alto a destra.
+- Scorciatoie: **Importa da "Le mie posizioni"** (ticker, stop e target già
+  nel report), **Importa portafoglio-export.xls** (export Fineco: quantità e
+  carico), **Esporta/Importa JSON** per portare la watchlist su un altro PC
+  (es. dal PC di casa a quello di lavoro).
+
+### Dove stanno i dati
+
+- Watchlist, posizioni e liquidità restano **solo nel browser**
+  (localStorage): non sono nel repo pubblico.
+- Al clic vengono passati al workflow `analisi_tecnica.yml` come input
+  mascherato nei log. Il file prodotto viene **cifrato** (AES-256-GCM, chiave
+  derivata dalla password del sito, secret `SITE_PASSWORD`) e pubblicato sul
+  branch `analisi-output`, che contiene solo i file cifrati delle ultime 24 ore.
+  La pagina lo scarica, lo decifra nel browser e lo salva.
+- La chiave di decifratura si salva nel browser quando entri con la password;
+  se manca, la sezione la chiede una volta.
+
+### Fonti e verifiche
+
+- Prezzi: Yahoo Finance via `yfinance` con `auto_adjust=False` (non aggiustati
+  per i dividendi; dividendi e split elencati a parte). 30 minuti: Yahoo dà solo
+  gli ultimi 60 giorni. Oro spot (`XAUUSD=X`) non esiste su Yahoo: si usa `GC=F`.
+- Controllo incrociato: la modalità Titolo confronta 18 valori con lo screener
+  TradingView (`tradingview-screener`) e riporta gli scarti.
+- Test: `python -m pytest tests -q` (indicatori su valori calcolati a mano e
+  contro TA-Lib, generazione completa su dati sintetici, cifratura).
+- `verifica_fonti.py`: diagnostica di Yahoo, TradingView e CORS sui simboli principali.
+- KAMA: KAMA(10,2,30) e KAMA(50,2,30) sulla chiusura (formula nel file).
+  Se su TradingView usi parametri o uno script diversi, cambiali in
+  `KAMA_DEFAULT` in `analisi/report.py` o nel campo `kama` del JSON.
+
+### Uso dal PC di casa, senza GitHub
+
+```
+py -m pip install -r requirements-analisi.txt
+py genera_analisi.py --modo titolo --simbolo SAN.PA --config watchlist_analisi.json
+py genera_analisi.py --modo portafoglio --config watchlist_analisi.json
+```
+`watchlist_analisi.json` è il file di "Esporta JSON"; il .md finisce in `Download`.

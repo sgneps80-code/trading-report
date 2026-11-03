@@ -56,9 +56,21 @@ def decimali_dati(x: pd.Series, massimo: int = 5) -> int:
     if not len(v):
         return 2
     for d in range(0, massimo + 1):
-        if np.all(np.abs(v - np.round(v, d)) <= 1e-5 * np.maximum(1.0, np.abs(v))):
+        if np.all(np.abs(v - np.round(v, d)) <= 1e-6 * np.maximum(1.0, np.abs(v))):
             return max(d, 2)
     return massimo
+
+
+def fp_min(x, dmax: int) -> str:
+    """Prezzo con il minimo numero di decimali (da 2 a dmax) che lo
+    rappresenta esattamente: 81.58 resta 81.58, 81.583 resta 81.583;
+    i valori calcolati (medie ecc.) escono con dmax decimali."""
+    if _nan(x):
+        return "n.d."
+    for d in range(2, dmax + 1):
+        if abs(x - round(x, d)) <= 1e-6 * max(1.0, abs(x)):
+            return f"{x:.{d}f}"
+    return f"{x:.{dmax}f}"
 
 
 def fp(x, d: int | None = None, rif: float | None = None) -> str:
@@ -211,7 +223,7 @@ class Analisi:
         return dist(self.ultimo, livello, self.atr_now)
 
     def p(self, x) -> str:
-        return fp(x, d=self.dp)
+        return fp_min(x, self.dp)
 
     def vol_rel(self, k: int = 0):
         vol = self.df["Volume"]
@@ -266,7 +278,7 @@ class Analisi:
             ["Chiusura precedente", f"{self.p(prev)} ({fdata(self.df.index[-2])})" if prev else nd()],
             ["Variazione", f"{self.ultimo - prev:+.{self.dp}f} ({(self.ultimo / prev - 1) * 100:+.2f}%)" if prev else nd()],
             ["Volume", fvol(r["Volume"]) + (" (parziale)" if self.incompleta else "")],
-            ["Volume relativo (vol / media 20 sedute precedenti)", fn(self.vol_rel())],
+            ["Volume relativo (vol / media 20 sedute precedenti)", fn(self.vol_rel()) + (" (su volume parziale)" if self.incompleta else "")],
             ["Stato mercato alla generazione", {True: "APERTO — l'ultima barra giornaliera è incompleta", False: "chiuso",
                                                None: nd("periodo di negoziazione assente nei metadati Yahoo")}[self.aperto]],
         ]
@@ -299,7 +311,7 @@ class Analisi:
     def sez_struttura(self, n: int, n_swing: int = 12) -> str:
         piv = self.pivot[-n_swing:]
         righe = [[fdata(p.data), "massimo" if p.tipo == "H" else "minimo", self.p(p.prezzo), p.etichetta or "—",
-                  "sì" if p.confermato else "no (provvisorio)", self.d(p.prezzo)] for p in piv]
+                  "sì" if p.confermato else "provvisorio", self.d(p.prezzo)] for p in piv]
         out = [f"## {n}. Struttura\n",
                f"Punti di swing (ZigZag, soglia {self.zz_mult} × ATR14), ultimi {len(piv)}; etichetta rispetto allo swing precedente dello stesso tipo "
                "(HH massimo crescente, LH massimo decrescente, HL minimo crescente, LL minimo decrescente):\n",
@@ -331,9 +343,11 @@ class Analisi:
             for g in T.gruppi_livelli(piv, 0.5 * self.atr_now):
                 if abs(g["prezzo"] / self.ultimo - 1) > 0.30:
                     continue
-                lv.append({"prezzo": g["prezzo"], "tipo": "swing",
-                           "descr": f"{g['tocchi']} {'tocco' if g['tocchi'] == 1 else 'tocchi'} ({', '.join(fdata(x) for x in g['date'][-6:])}"
-                                    + (", …" if g['tocchi'] > 6 else "") + f"); intervallo {self.p(g['min'])}–{self.p(g['max'])}"})
+                det = f"{g['tocchi']} {'tocco' if g['tocchi'] == 1 else 'tocchi'}: {', '.join(fdata(x) for x in g['date'][-4:])}" \
+                    + (" e precedenti" if g["tocchi"] > 4 else "")
+                if g["tocchi"] > 1:
+                    det += f"; da {self.p(g['min'])} a {self.p(g['max'])}"
+                lv.append({"prezzo": g["prezzo"], "tipo": "swing", "descr": det})
         for g in self.gap12:
             if g["chiuso_dopo"] is None:
                 lv.append({"prezzo": g["da"] if g["direzione"] == "rialzo" else g["a"], "tipo": "gap aperto",
@@ -426,16 +440,18 @@ class Analisi:
                        f"ribasso {self.p(r['obiettivo_ribasso'])} ({self.d(r['obiettivo_ribasso'])}).")
         else:
             out.append("- **Base/rettangolo**: nessuna finestra di ≥15 sedute con altezza ≤ 4 ATR14 terminata nelle ultime 60 sedute.")
-        fb = T.fibonacci(self.pivot_magg)
-        if fb:
+        zzm = max(3.0, 2 * self.zz_mult)
+        fibs = T.fibonacci(self.pivot_magg)
+        if not fibs:
+            out.append("- **Fibonacci**: n.d. (meno di due swing maggiori).")
+        for fb in fibs:
             a, b = fb["da"], fb["a"]
             lv = "; ".join(f"{r * 100:.1f}% = {self.p(v)} ({self.d(v)})" for r, v in fb["livelli"].items())
-            out.append(f"- **Fibonacci** dell'ultimo swing maggiore completato (ZigZag {max(3.0, 2 * self.zz_mult)} × ATR14): "
+            stato = "completato" if b.confermato else "in corso (estremo finale provvisorio)"
+            out.append(f"- **Fibonacci, swing maggiore {stato}** (ZigZag {zzm} × ATR14): "
                        f"{'minimo' if a.tipo == 'L' else 'massimo'} {self.p(a.prezzo)} ({fdata(a.data)}) → "
-                       f"{'massimo' if b.tipo == 'H' else 'minimo'} {self.p(b.prezzo)} ({fdata(b.data)}), swing al {fb['direzione']}. "
+                       f"{'massimo' if b.tipo == 'H' else 'minimo'} {self.p(b.prezzo)} ({fdata(b.data)}), al {fb['direzione']}. "
                        f"Ritracciamenti: {lv}.")
-        else:
-            out.append("- **Fibonacci**: n.d. (meno di due swing maggiori confermati).")
         return "\n".join(out)
 
     def sez_statistiche(self, n: int, sintesi: bool = False) -> str:
@@ -640,9 +656,8 @@ class Analisi:
                 righe.append([col, fn(tv, 4), fn(mio, 4), "n.d.", "n.d."])
                 continue
             righe.append([col, fn(tv, 4), fn(mio, 4), fn(mio - tv, 4, True), fn((mio / tv - 1) * 100 if tv else None, 3, True)])
-        out.append(f"Ticker TradingView: {tk}. Lo screener si riferisce alla barra giornaliera corrente di TradingView "
-                   f"(dati che possono essere differiti); il calcolo locale all'ultima barra Yahoo del {fdata(self.oggi)}. "
-                   "Scarti grandi su tutte le righe indicano barre diverse (orario o dati), non formule diverse.\n")
+        out.append(f"Ticker {tk}; TradingView = sua barra giornaliera corrente, Calcolato = ultima barra Yahoo del {fdata(self.oggi)}. "
+                   "A mercato aperto gli scarti riflettono soprattutto la differenza dell'ultimo prezzo.\n")
         out.append(tabella(["Indicatore", "TradingView", "Calcolato", "Scarto", "Scarto %"], righe))
         return "\n".join(out)
 
@@ -650,13 +665,13 @@ class Analisi:
         dp = self.dp
 
         def riga(t, r, fmt_idx):
-            return f"{fmt_idx(t)},{r['Open']:.{dp}f},{r['High']:.{dp}f},{r['Low']:.{dp}f},{r['Close']:.{dp}f},{int(r['Volume'])}"
+            return f"{fmt_idx(t)},{fp_min(r['Open'], dp)},{fp_min(r['High'], dp)},{fp_min(r['Low'], dp)},{fp_min(r['Close'], dp)},{int(r['Volume'])}"
 
         def csv(df, fmt_idx, intest="data"):
             rows = [f"{intest},open,high,low,close,volume"] + [riga(t, r, fmt_idx) for t, r in df.iterrows()]
             return "```csv\n" + "\n".join(rows) + "\n```"
 
-        out = [f"## {n}. Dati grezzi (prezzi non aggiustati, {self.valuta}, {dp} decimali)\n"]
+        out = [f"## {n}. Dati grezzi (prezzi non aggiustati, {self.valuta}; ogni prezzo con i decimali che ha nella fonte, max {dp})\n"]
         g = self.df.iloc[-260:]
         out += [f"Giornaliero, ultime {len(g)} sedute:\n", csv(g, fdata)]
         w = self.s.settimanale.iloc[-156:]
@@ -697,7 +712,7 @@ def intestazione_definizioni(cfg: dict) -> str:
         "- **ATR 14**: RMA14 del True Range = max(H − L, |H − C[1]|, |L − C[1]|). ATR% = ATR/C·100.",
         "- **Bollinger 20-2**: base SMA20 ± 2·deviazione standard di popolazione a 20; %B = (C − inf)/(sup − inf); larghezza % = (sup − inf)/base·100.",
         "- **Volume relativo**: volume della seduta / media dei volumi delle 20 sedute precedenti.",
-        f"- **ZigZag**: un massimo (minimo) diventa swing quando il prezzo si allontana in senso opposto di almeno {zz} × ATR14 (ATR della barra dello swing). L'ultimo estremo non ancora confermato è \"provvisorio\". Swing maggiori (Fibonacci): soglia {max(3.0, 2 * zz)} × ATR14.",
+        f"- **ZigZag**: un massimo (minimo) diventa swing quando il prezzo si allontana in senso opposto di almeno {zz} × ATR14 (ATR della barra dello swing). L'ultimo estremo non ancora confermato è \"provvisorio\". Swing maggiori (Fibonacci): soglia {max(3.0, 2 * zz)} × ATR14; Fibonacci sull'ultimo swing maggiore completato e su quello in corso.",
         "- **Livelli**: gruppi di swing confermati degli ultimi 3 anni entro ±0.5 ATR14; numeri tondi con passo = metà della potenza di 10 inferiore al prezzo.",
         "- **Gap**: minimo della seduta > massimo della precedente (o massimo < minimo); chiuso quando una seduta successiva tocca il bordo della seduta precedente il gap.",
         "- **Doppio massimo/minimo candidato**: tre swing consecutivi H-L-H (L-H-L) con i due estremi entro 1 ATR14. **Base/rettangolo**: ≥15 sedute con (max H − min L) ≤ 4 ATR14; tocco = seduta entro 0.25 ATR dal bordo, sedute consecutive contano una volta; obiettivo di misura = bordo rotto ± altezza.",
@@ -804,7 +819,7 @@ def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
                                        for k, e in est.items() if e))
     lv = a.livelli(4)
     r.append("**Livelli più vicini**: " + ("; ".join(f"{x['lato'][:3]}. {a.p(x['prezzo'])} [{x['tipo']}"
-                                                     + (f", {x['descr'].split(' (')[0]}" if x['tipo'] == 'swing' else '') + f"] {a.d(x['prezzo'])}"
+                                                     + (f", {x['descr'].split(':')[0]}" if x['tipo'] == 'swing' else '') + f"] {a.d(x['prezzo'])}"
                                                      for x in lv) or "nessuno"))
     aperti = [g for g in a.gap12 if g["chiuso_dopo"] is None]
     r.append("**Gap aperti 12 mesi** (>0.5 ATR): " + ("; ".join(f"{fdata(g['data'])} {g['direzione']} {a.p(g['da'])}–{a.p(g['a'])} ({fn(g['ampiezza_atr'])} ATR)"

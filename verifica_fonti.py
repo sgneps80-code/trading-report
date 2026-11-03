@@ -159,7 +159,8 @@ def verifica_tradingview(campioni):
     try:
         from tradingview_screener import Query
         import tradingview_screener
-        out(f"tradingview-screener {getattr(tradingview_screener, '__version__', '?')}\n")
+        from importlib.metadata import version
+        out(f"tradingview-screener {version('tradingview-screener')}\n")
     except Exception as e:
         out(f"Libreria non importabile: {e}")
         return
@@ -167,17 +168,23 @@ def verifica_tradingview(campioni):
     out("| Yahoo | Ticker TV | close TV | RSI TV | RSI locale | ATR TV | ATR locale | SMA50 TV | SMA50 locale | EMA20 TV | EMA20 locale |")
     out("|---|---|---|---|---|---|---|---|---|---|---|")
     for ysym, cands in SIMBOLI.items():
-        trovato = None
+        trovato, errori = None, []
         for tv in cands:
-            try:
-                n, df = Query().select(*cols).set_tickers(tv).get_scanner_data()
-                if n:
-                    trovato = (tv, df.iloc[0])
+            for tentativo in range(3):
+                try:
+                    n, df = Query().select(*cols).set_tickers(tv).get_scanner_data()
+                    if n:
+                        trovato = (tv, df.iloc[0])
+                    else:
+                        errori.append(f"{tv}: nessuna riga")
                     break
-            except Exception:
-                continue
+                except Exception as e:
+                    errori.append(f"{tv}: {type(e).__name__} {str(e)[:60]}")
+                    __import__("time").sleep(2 * (tentativo + 1))
+            if trovato:
+                break
         if not trovato:
-            out(f"| {ysym} | nessuno tra {', '.join(cands)} | | | | | | | | | |")
+            out(f"| {ysym} | non trovato ({'; '.join(errori)[:200]}) | | | | | | | | | |")
             continue
         tv, r = trovato
         loc = {}

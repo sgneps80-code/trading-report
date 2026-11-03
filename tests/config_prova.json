@@ -13,13 +13,14 @@
     {"simbolo": "ENI.MI", "nome": "Eni", "valuta": "EUR", "tipo": "azione", "tv": "MIL:ENI"},
     {"simbolo": "XUSE.MI", "nome": "iShares MSCI World ex-USA", "valuta": "EUR", "tipo": "etf", "benchmark": "FTSEMIB.MI",
      "posizione": {"quantita": 50, "carico": 7.0}},
-    {"simbolo": "PHAU.MI", "nome": "ETC oro fisico", "tipo": "etc",
-     "collegati": [{"simbolo": "GC=F", "tipo": "sottostante", "cambio": "EURUSD=X", "nome": "Oro future COMEX (USD)"}]},
+    {"simbolo": "GBSE.MI", "nome": "WisdomTree Physical Gold EUR Daily Hedged", "tipo": "etc", "valuta": "EUR",
+     "collegati": [{"simbolo": "GC=F", "tipo": "sottostante", "cambio": "EURUSD=X", "nome": "Oro future COMEX (USD)"}],
+     "posizione": {"quantita": 200, "carico": 18.0, "stop": 17.0, "target": 24.0}},
     {"simbolo": "SNY", "nome": "Sanofi ADR", "valuta": "USD", "tipo": "azione",
      "posizione": {"quantita": 20, "carico": 45.0, "target": 60.0}},
     {"simbolo": "REY.MI", "tipo": "azione"},
     {"simbolo": "SOM.MI", "tipo": "azione"},
     {"simbolo": "OMER.MI", "tipo": "azione"},
-    {"simbolo": "GBSE.MI", "tipo": "azione"}
+    {"simbolo": "EURUSD=X", "nome": "Euro/Dollaro", "tipo": ""}
   ]
 }

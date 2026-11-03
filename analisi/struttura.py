@@ -239,13 +239,18 @@ def _episodi(mask: np.ndarray) -> int:
     return int(m[0]) + int(np.sum(m[1:] & ~m[:-1])) if len(m) else 0
 
 
-def fibonacci(piv_maggiori: list[Pivot]) -> dict | None:
-    """Ritracciamenti dell'ultimo swing maggiore completato (tra gli ultimi
-    due punti confermati dello ZigZag a soglia maggiore)."""
+def fibonacci(piv_maggiori: list[Pivot]) -> list[dict]:
+    """Ritracciamenti 38.2/50/61.8/78.6 dell'ultimo swing maggiore
+    COMPLETATO (ultimi due punti confermati) e, se esiste, dello swing IN
+    CORSO (dall'ultimo punto confermato all'estremo provvisorio)."""
+    def leg(a, b):
+        rng = b.prezzo - a.prezzo
+        return {"da": a, "a": b, "direzione": "rialzo" if rng > 0 else "ribasso",
+                "livelli": {r: b.prezzo - r * rng for r in (0.382, 0.5, 0.618, 0.786)}}
     conf = [p for p in piv_maggiori if p.confermato]
-    if len(conf) < 2:
-        return None
-    a, b = conf[-2], conf[-1]
-    rng = b.prezzo - a.prezzo
-    livelli = {r: b.prezzo - r * rng for r in (0.382, 0.5, 0.618, 0.786)}
-    return {"da": a, "a": b, "direzione": "rialzo" if rng > 0 else "ribasso", "livelli": livelli}
+    out = []
+    if len(conf) >= 2:
+        out.append(leg(conf[-2], conf[-1]))
+    if piv_maggiori and not piv_maggiori[-1].confermato and conf:
+        out.append(leg(conf[-1], piv_maggiori[-1]))
+    return out

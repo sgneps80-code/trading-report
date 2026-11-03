@@ -192,10 +192,18 @@ def screener_tv(candidati: list[str]) -> tuple[str | None, dict, str | None]:
         from tradingview_screener import Query
     except Exception as e:
         return None, {}, f"libreria tradingview-screener non disponibile ({e})"
-    try:
-        n, df = Query().select(*TV_COLONNE.keys()).set_tickers(*candidati).get_scanner_data()
-    except Exception as e:
-        return None, {}, f"{type(e).__name__}: {str(e)[:160]}"
+    import time
+    err = None
+    for tentativo in range(3):
+        try:
+            n, df = Query().select(*TV_COLONNE.keys()).set_tickers(*candidati).get_scanner_data()
+            err = None
+            break
+        except Exception as e:
+            err = f"{type(e).__name__}: {str(e)[:160]}"
+            time.sleep(2 * (tentativo + 1))
+    if err:
+        return None, {}, f"{err} (dopo 3 tentativi)"
     if not n or df is None or df.empty:
         return None, {}, f"lo screener non ha restituito righe per {', '.join(candidati)}"
     ordine = {c: i for i, c in enumerate(candidati)}

@@ -28,7 +28,7 @@ jobs:
       - name: File di prova
         run: |
           mkdir -p out
-          for args in "--modo titolo --simbolo SAN.PA" "--modo portafoglio" "--modo titolo --simbolo PHAU.MI" "--modo titolo --simbolo GBSE.MI"; do
+          for args in "--modo titolo --simbolo SAN.PA" "--modo portafoglio" "--modo titolo --simbolo GBSE.MI" "--modo titolo --simbolo ISP.MI"; do
             python genera_analisi.py $args --config tests/config_prova.json --out out 2>> out/errori.txt || echo "FALLITO: $args" >> out/errori.txt
           done
           grep -v "Pandas4Warning\|whatsnew\|sort_index" out/errori.txt > out/errori_filtrati.txt || true
