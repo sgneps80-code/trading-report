@@ -1,0 +1,102 @@
+name: Analisi tecnica
+
+# Avviato dal pulsante "Titolo"/"Portafoglio" nella sezione
+# "Analisi tecnica per Claude" della pagina del report. Genera il file .md,
+# lo CIFRA con la password del sito (secret SITE_PASSWORD) e lo pubblica sul
+# branch analisi-output, da dove la pagina lo scarica e lo decifra.
+# Il repo è pubblico: nessun dato personale in chiaro né nei log né nei file.
+
+run-name: "analisi ${{ inputs.request_id }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: 'Identificativo casuale generato dalla pagina'
+        required: true
+      modo:
+        description: 'titolo oppure portafoglio'
+        required: true
+        default: 'titolo'
+      simbolo:
+        description: 'Simbolo Yahoo (solo modo titolo)'
+        required: false
+        default: ''
+      config_json:
+        description: 'Watchlist, posizioni e liquidità dalla pagina (dato personale: mascherato)'
+        required: false
+        default: '{}'
+      prova:
+        description: 'Solo per file di prova con dati fittizi marcati dati_di_prova: output non cifrato'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: write
+
+# Una pubblicazione alla volta sul branch analisi-output
+concurrency:
+  group: analisi-output
+  cancel-in-progress: false
+
+jobs:
+  genera:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Maschera i dati personali prima di ogni altro log
+        # Stesso schema di trading_report.yml: il valore si legge dal payload
+        # dell'evento a runtime, mai con ${{ }} nel testo del comando.
+        run: |
+          valore=$(python3 -c "import json; print(json.load(open('$GITHUB_EVENT_PATH', encoding='utf-8')).get('inputs', {}).get('config_json') or '')")
+          if [ -n "$valore" ] && [ "$valore" != "{}" ]; then
+            echo "::add-mask::$valore"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements-analisi.txt
+
+      - name: Genera il file
+        env:
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          ANALISI_OUT: out_analisi
+        run: python genera_analisi.py --da-evento
+
+      - name: Pubblica sul branch analisi-output
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Branch "usa e getta": un solo commit (orfano) con i file delle
+        # ultime 24 ore, riscritto a ogni richiesta. Nessuna storia accumulata.
+        run: |
+          set -euo pipefail
+          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          mkdir pub && cd pub
+          git init -q
+          git checkout -q --orphan analisi-output
+          if git fetch -q --depth 1 "$remote" analisi-output 2>/dev/null; then
+            git checkout -q FETCH_HEAD -- . || true
+          fi
+          adesso=$(date +%s)
+          touch indice.txt
+          awk -v t="$adesso" '$1 > t - 86400' indice.txt > indice.nuovo || true
+          for f in *; do
+            case "$f" in indice.txt|indice.nuovo) continue;; esac
+            id="${f%.*}"
+            grep -q " ${id}\$" indice.nuovo || rm -f "$f"
+          done
+          for f in ../out_analisi/*; do
+            cp "$f" .
+            b=$(basename "$f"); echo "$adesso ${b%.*}" >> indice.nuovo
+          done
+          sort -u indice.nuovo > indice.txt && rm indice.nuovo
+          git add -A
+          git -c user.name="trading-bot" -c user.email="bot@trading-report" commit -qm "analisi $(date -u +%FT%TZ)"
+          git push -qf "$remote" HEAD:analisi-output

@@ -15,6 +15,7 @@ import regole
 import storico
 import indicatori_storici
 import segnali_medio_periodo
+import analisi_ui
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -1611,6 +1612,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   async function unlock() {{
     const h = await sha256(document.getElementById("pwd").value);
     if (h === HASH) {{
+      // chiave per decifrare i file di "Analisi tecnica" (vedi analisi_ui.py)
+      if (window.analisiSalvaChiave) analisiSalvaChiave(document.getElementById("pwd").value);
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
       localStorage.setItem("tr_auth", h);
@@ -1887,6 +1890,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
   </div>
+
+{analisi_ui.sezione_html()}
 
   <!-- SINCRONIZZA DATI PERSONALI -->
   <div class="section">

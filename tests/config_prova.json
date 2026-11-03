@@ -1,0 +1,25 @@
+{
+  "versione": 1,
+  "dati_di_prova": true,
+  "liquidita": 10000,
+  "zigzag_atr": 1.5,
+  "strumenti": [
+    {"simbolo": "SAN.PA", "nome": "Sanofi", "isin": "FR0000120578", "mercato": "Euronext Parigi", "valuta": "EUR", "tipo": "azione",
+     "benchmark": "^FCHI", "tv": "EURONEXT:SAN",
+     "collegati": [{"simbolo": "SNY", "tipo": "adr", "rapporto": 0.5, "cambio": "EURUSD=X", "nome": "Sanofi ADR"}],
+     "posizione": {"quantita": 100, "carico": 80.0, "stop": 75.0, "target": 100.0, "uscita": "2027-03-31"}},
+    {"simbolo": "ISP.MI", "nome": "Intesa Sanpaolo", "valuta": "EUR", "tipo": "azione", "tv": "MIL:ISP",
+     "posizione": {"quantita": 1000, "carico": 4.5, "stop": 4.2}},
+    {"simbolo": "ENI.MI", "nome": "Eni", "valuta": "EUR", "tipo": "azione", "tv": "MIL:ENI"},
+    {"simbolo": "XUSE.MI", "nome": "iShares MSCI World ex-USA", "valuta": "EUR", "tipo": "etf", "benchmark": "FTSEMIB.MI",
+     "posizione": {"quantita": 50, "carico": 7.0}},
+    {"simbolo": "PHAU.MI", "nome": "ETC oro fisico", "tipo": "etc",
+     "collegati": [{"simbolo": "GC=F", "tipo": "sottostante", "cambio": "EURUSD=X", "nome": "Oro future COMEX (USD)"}]},
+    {"simbolo": "SNY", "nome": "Sanofi ADR", "valuta": "USD", "tipo": "azione",
+     "posizione": {"quantita": 20, "carico": 45.0, "target": 60.0}},
+    {"simbolo": "REY.MI", "tipo": "azione"},
+    {"simbolo": "SOM.MI", "tipo": "azione"},
+    {"simbolo": "OMER.MI", "tipo": "azione"},
+    {"simbolo": "GBSE.MI", "tipo": "azione"}
+  ]
+}
