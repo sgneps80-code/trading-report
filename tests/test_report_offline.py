@@ -97,6 +97,7 @@ def test_mercato_principale_e_qualita():
     sts = [R.Strumento.da_dict({"simbolo": "1SAN.MI", "isin": "FR0000120578", "valuta": "EUR"})]
     mp = R.documento_portafoglio(sts, CFG)
     assert "errore di calcolo" not in mp and "SAN.PA (ordini su 1SAN.MI)" in mp
+    assert mp.count("Listino di esecuzione 1SAN.MI") == 1
 
 
 def test_principale_da_isin_e_wilson():

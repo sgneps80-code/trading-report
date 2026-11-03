@@ -686,10 +686,10 @@ class Analisi:
                    + f"; ombre > 3 ATR con volume basso {int(omb.sum())}. Queste stampe NON entrano nell'analisi, fatta su {self.sym}.")
         return "\n\n".join(out)
 
-    def sez_collegati(self, n: int, righe_max: int = 4) -> str:
+    def sez_collegati(self, n: int, righe_max: int = 4, sintesi: bool = False) -> str:
         out = [f"## {n}. Strumenti collegati\n"]
         if self.esec is not None:
-            out.append(self.blocco_esecuzione() + "\n")
+            out.append(self.blocco_esecuzione(sintesi=sintesi) + "\n")
         if not self.st.collegati:
             if self.esec is None:
                 out.append("Nessuno indicato nella watchlist.")
@@ -1085,10 +1085,8 @@ def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
                 f"ribasso {'/'.join(fn(esc['giu_pct'][i]) for i in (1, 3, 5))}% (n={esc['n']})" if esc else "") + ".")
     fr = a.sez_forza_relativa(0).split("\n\n")
     r.append("**Forza relativa**: " + fr[0].replace("## 0. ", "") + "\n\n" + fr[-1] if len(fr) > 1 else "")
-    if a.esec is not None:
-        r.append(a.blocco_esecuzione(sintesi=True))
-    if st.collegati:
-        r.append(a.sez_collegati(0, righe_max=2).replace("## 0. Strumenti collegati\n", "**Strumenti collegati**\n").strip())
+    if st.collegati or a.esec is not None:
+        r.append(a.sez_collegati(0, righe_max=2, sintesi=True).replace("## 0. Strumenti collegati\n", "**Strumenti collegati**\n").strip())
     ev = a.sez_eventi(0).split("\n")[1:]
     r.append("**Eventi**:\n" + "\n".join(x for x in ev if x and "Split" not in x and "Nota" not in x and "Importo" not in x))
     if st.posizione.get("quantita"):
