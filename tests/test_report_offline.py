@@ -81,7 +81,8 @@ def test_titolo():
         assert f"\n## {k}. " in md, f"manca la sezione {k}"
     assert "```csv" in md and "FILE DI PROVA" in md
     assert "errore di calcolo" not in md, md[md.find("errore di calcolo") - 300:][:600]
-    assert len(md) < 43000, len(md)      # limite indicativo ~40000 (dati sintetici con molti gap)
+    assert len(md) < R.LIMITE_TITOLO, len(md)
+    assert "oltre il limite indicativo" not in md
 
 
 def test_mercato_principale_e_qualita():

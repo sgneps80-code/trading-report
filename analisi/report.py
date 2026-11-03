@@ -24,6 +24,10 @@ VERSIONE = "1.1"
 
 KAMA_DEFAULT = [(10, 2, 30), (50, 2, 30)]
 
+# Lunghezza oltre la quale il file Titolo segnala in fondo di essere più lungo del solito
+# (un Titolo tipico è 40-44 mila caratteri, di cui ~21.600 di dati grezzi).
+LIMITE_TITOLO = 46000
+
 TIPI_ZAINETTO = {
     "azione": "sì (plusvalenze = redditi diversi)",
     "etc": "sì (plusvalenze = redditi diversi)",
@@ -1005,8 +1009,8 @@ def documento_titolo(st: Strumento, cfg: dict) -> str:
            intestazione_definizioni(cfg)]
     sez += [_protetta(fn_, n, tit) for n, (fn_, tit) in enumerate(sezioni, start=1)]
     doc = "\n\n".join(sez) + "\n"
-    if len(doc) > 42000:
-        doc += f"\n> Nota: file di {len(doc)} caratteri, oltre il limite indicativo di 40000.\n"
+    if len(doc) > LIMITE_TITOLO:
+        doc += f"\n> Nota: file di {len(doc)} caratteri, oltre il limite indicativo di {LIMITE_TITOLO}.\n"
     return doc
 
 
