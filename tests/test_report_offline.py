@@ -120,6 +120,29 @@ def test_incoerenti_e_ombre():
     assert ombre_anomale(df2, atr, v20).tolist() == [False, False, True]
 
 
+def test_seduta_odierna_assente(monkeypatch):
+    """Mercato aperto, ultima barra giornaliera di giorni fa, barre a 30 minuti di oggi."""
+    base = _serie_finta
+
+    def finta(simbolo, intraday=True, eventi=True):
+        s = base(simbolo, intraday, eventi)
+        if simbolo == "ENI.MI":
+            adesso = pd.Timestamp(D.ora_roma())
+            s.meta = {"currency": "EUR", "currentTradingPeriod": {"regular": {
+                "start": adesso - pd.Timedelta(hours=1), "end": adesso + pd.Timedelta(hours=1)}}}
+            oggi = pd.date_range(adesso.normalize() + pd.Timedelta(hours=9), periods=3, freq="30min")
+            extra = pd.DataFrame({"Open": 50.0, "High": 51.0, "Low": 49.0, "Close": 50.25, "Volume": 10.0}, index=oggi)
+            s.m30 = pd.concat([s.m30, extra])
+        return s
+    monkeypatch.setattr(D, "scarica", finta)
+    md = R.documento_titolo(R.Strumento.da_dict({"simbolo": "ENI.MI", "tipo": "azione"}), CFG)
+    assert "errore di calcolo" not in md
+    testa = md[:md.index("## Definizioni")]
+    assert "la seduta di oggi MANCA" in testa and "Ultimo prezzo intraday: 50.25" in testa
+    oggi = D.ora_roma().strftime("%Y-%m-%d")
+    assert f"{oggi} (in corso):" in md                     # 30 minuti: oggi compreso nelle ultime 5 sedute
+
+
 def test_portafoglio():
     sts = [R.Strumento.da_dict(x) for x in CFG["strumenti"]]
     md = R.documento_portafoglio(sts, CFG)

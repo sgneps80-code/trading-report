@@ -8,7 +8,6 @@ Convenzioni del file: separatore decimale "punto", orari Europe/Rome,
 """
 from __future__ import annotations
 
-import datetime as dt
 import math
 from dataclasses import dataclass, field
 
@@ -379,10 +378,8 @@ class Analisi:
     def sez_prezzo(self, n: int) -> str:
         r = self.df.iloc[-1]
         prev = float(self.c.iloc[-2]) if len(self.c) > 1 else None
-        ora = D.ultimo_orario(self.s)
         righe = [
             ["Ultimo", self.p(self.ultimo) + f" {self.valuta}"],
-            ["Orario ultimo prezzo (Yahoo regularMarketTime)", D.fmt_ora(ora) if ora is not None else nd("assente nei metadati")],
             ["Seduta", fdata(self.oggi) + (" (in corso)" if self.incompleta else "")],
             ["Apertura / Massimo / Minimo", f"{self.p(r['Open'])} / {self.p(r['High'])} / {self.p(r['Low'])}"],
             ["Chiusura precedente", f"{self.p(prev)} ({fdata(self.df.index[-2])})" if prev else nd()],
@@ -405,7 +402,7 @@ class Analisi:
             pend = (v0 / v5 - 1) * 100 if v0 and v5 else None
             righe.append([m, self.p(v0), self.p(v5), self.p(v20),
                           dist(v0, self.ultimo, self.atr_now) if v0 else "n.d.", fn(pend, 2, True) + "%" if pend is not None else "n.d."])
-        out = [f"## {n}. Indicatori (barre giornaliere; 'k sedute fa' = k barre prima dell'ultima)\n",
+        out = [f"## {n}. Indicatori (giornalieri)\n",
                "Medie mobili — distanza = prezzo rispetto alla media; pendenza = variazione % della media in 5 sedute.\n",
                tabella(["Media", "Attuale", "5 sedute fa", "20 sedute fa", "Distanza prezzo", "Pendenza 5s"], righe)]
         osc = [("RSI14", "RSI 14", 2), ("StochK", "Stoc. %K (14,3)", 2), ("StochD", "Stoc. %D (3)", 2),
@@ -637,7 +634,7 @@ class Analisi:
                 "Valute non convertite.\n\n"
                 + tabella(["Periodo", "Strumento %", "Rif. strum.", "Benchmark %", "Rif. bench.", "Differenza pp", "Rapporto %"], righe))
 
-    def blocco_esecuzione(self, righe_max: int = 10, sintesi: bool = False) -> str:
+    def blocco_esecuzione(self, righe_max: int = 5, sintesi: bool = False) -> str:
         """Listino di esecuzione (es. 1SAN.MI) rispetto al mercato principale analizzato."""
         L, P, simL = self.esec, self.s, self.st.simbolo
         out = [f"**Listino di esecuzione {simL}** rispetto al mercato principale {self.sym}"
@@ -652,6 +649,10 @@ class Analisi:
             f = float(self.conv.iloc[-1]) if self.conv is not None else 1.0
             out.append(f"Ultimi prezzi: {simL} {self.p(lp)} alle {D.fmt_ora(tl)}; {self.sym} {self.p(pp)} alle {D.fmt_ora(tp)}; "
                        f"scarto {(lp / (pp * f) - 1) * 100:+.2f}% (orari diversi = scarto non simultaneo).")
+        else:
+            out.append(f"Ultimo prezzo intraday di {simL}: {nd(fl) if lp is None else 'disponibile'}"
+                       + (f"; di {self.sym}: {nd(fp_)}" if pp is None else "")
+                       + f". Ultima chiusura giornaliera di {simL}: {self.p(L.giornaliero['Close'].iloc[-1])} del {fdata(L.giornaliero.index[-1])}.")
         Ld, Pd = L.giornaliero, P.giornaliero
         f = self.conv.reindex(Pd.index).ffill() if self.conv is not None else pd.Series(1.0, index=Pd.index)
         pc = Pd["Close"] * f
@@ -685,7 +686,7 @@ class Analisi:
                    + f"; ombre > 3 ATR con volume basso {int(omb.sum())}. Queste stampe NON entrano nell'analisi, fatta su {self.sym}.")
         return "\n\n".join(out)
 
-    def sez_collegati(self, n: int, righe_max: int = 6) -> str:
+    def sez_collegati(self, n: int, righe_max: int = 4) -> str:
         out = [f"## {n}. Strumenti collegati\n"]
         if self.esec is not None:
             out.append(self.blocco_esecuzione() + "\n")
