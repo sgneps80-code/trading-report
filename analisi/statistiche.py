@@ -7,6 +7,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .qualita import wilson
+
 PERCENTILI = (5, 10, 25, 50, 75, 90, 95)
 ORIZZONTI = (5, 10, 20)
 
@@ -25,6 +27,7 @@ def volatilita(c: pd.Series) -> dict:
         out[n] = (float(w.std(ddof=1)) if w.notna().sum() == n else None, int(w.notna().sum()))
     rr = r.dropna()
     out["oltre3"] = (float((rr.abs() > 3).mean() * 100) if len(rr) else None, len(rr))
+    out["oltre3_ic"] = wilson(int((rr.abs() > 3).sum()), len(rr))
     out["su3"] = float((rr > 3).mean() * 100) if len(rr) else None
     out["giu3"] = float((rr < -3).mean() * 100) if len(rr) else None
     return out
@@ -58,13 +61,38 @@ def escursioni(df: pd.DataFrame, atr: pd.Series) -> dict:
     return out
 
 
-def chiusura_gap(gaps: list[dict], n_sedute_totali: int) -> dict:
-    """Frequenza di chiusura entro h sedute, solo sui gap con almeno h sedute successive osservate."""
+def chiusura_gap(gaps: list[dict], df: pd.DataFrame, atr: pd.Series) -> dict:
+    """Per ogni orizzonte h: quota di gap chiusi entro h sedute (solo gap con
+    almeno h sedute successive), con IC di Wilson, e TASSO ATTESO: la stessa
+    prova applicata a tutte le sedute. Per ogni gap si misura la distanza d
+    (in ATR14 del giorno del gap) tra la chiusura del giorno del gap e il bordo
+    da richiudere; il tasso atteso e' la frequenza, su tutte le sedute, di un
+    movimento contrario >= d entro h sedute (minimo dei minimi per i gap al
+    rialzo, massimo dei massimi per quelli al ribasso), mediata sui gap."""
+    c, h, l = df["Close"].to_numpy(float), df["High"].to_numpy(float), df["Low"].to_numpy(float)
+    a = atr.to_numpy(float)
+    n_tot = len(c)
     out = {}
     for hz in ORIZZONTI:
-        validi = [g for g in gaps if n_sedute_totali - 1 - g["i"] >= hz]
+        validi = [g for g in gaps if n_tot - 1 - g["i"] >= hz]
         chiusi = [g for g in validi if g["chiuso_dopo"] is not None and g["chiuso_dopo"] <= hz]
-        out[hz] = (len(chiusi) / len(validi) * 100 if validi else None, len(validi))
+        t = np.arange(max(n_tot - hz, 0))
+        t = t[~np.isnan(a[t]) & (a[t] > 0)] if len(t) else t
+        giu = np.array([(c[i] - l[i + 1:i + 1 + hz].min()) / a[i] for i in t])
+        su = np.array([(h[i + 1:i + 1 + hz].max() - c[i]) / a[i] for i in t])
+        attesi = []
+        for g in validi:
+            i, ag = g["i"], a[g["i"]]
+            if np.isnan(ag) or ag <= 0 or not len(t):
+                continue
+            if g["direzione"] == "rialzo":
+                attesi.append(float((giu >= (c[i] - g["da"]) / ag).mean()))
+            else:
+                attesi.append(float((su >= (g["a"] - c[i]) / ag).mean()))
+        atteso = float(np.mean(attesi)) * 100 if attesi else None
+        out[hz] = {"pct": len(chiusi) / len(validi) * 100 if validi else None, "n": len(validi),
+                   "ic": wilson(len(chiusi), len(validi)), "atteso": atteso, "n_sedute": len(t),
+                   "ic_atteso": wilson(round(atteso / 100 * len(t)), len(t)) if atteso is not None else None}
     return out
 
 
@@ -72,7 +100,17 @@ def _riassunto(vals: list[float]) -> dict:
     if not vals:
         return {"n": 0}
     v = np.array(vals)
-    return {"n": len(v), "media": float(v.mean()), "mediana": float(np.median(v)), "pos": float((v > 0).mean() * 100)}
+    k = int((v > 0).sum())
+    return {"n": len(v), "media": float(v.mean()), "mediana": float(np.median(v)), "pos": k / len(v) * 100,
+            "ic": wilson(k, len(v))}
+
+
+def incondizionato(c, hz: int) -> dict:
+    """Rendimento a hz sedute da TUTTE le sedute (base di confronto)."""
+    cv = np.asarray(c, dtype=float)
+    if len(cv) <= hz:
+        return {"n": 0}
+    return _riassunto(list((cv[hz:] / cv[:-hz] - 1) * 100))
 
 
 def dopo_giorni_ampi(df: pd.DataFrame, atr: pd.Series, k: float = 2.0) -> dict:

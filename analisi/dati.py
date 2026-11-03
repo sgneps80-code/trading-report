@@ -105,7 +105,7 @@ def scarica(simbolo: str, intraday: bool = True, eventi: bool = True) -> Serie:
         s.errori["settimanale"] = f"{type(e).__name__}: {str(e)[:160]}"
     if intraday:
         try:
-            m = t.history(period="60d", interval="30m", auto_adjust=False, raise_errors=True)
+            m = t.history(period="1mo", interval="30m", auto_adjust=False, raise_errors=True)
             s.m30 = _pulisci(m, False)
         except Exception as e:
             s.errori["30m"] = f"{type(e).__name__}: {str(e)[:160]}"
@@ -124,18 +124,58 @@ def scarica(simbolo: str, intraday: bool = True, eventi: bool = True) -> Serie:
     return s
 
 
-def mercato_aperto(s: Serie, adesso: dt.datetime | None = None) -> bool | None:
-    """True/False dal periodo di negoziazione regolare indicato da Yahoo;
-    None se l'informazione non c'e'."""
+# Orari di negoziazione continua standard (festivita' non considerate),
+# usati solo quando Yahoo non restituisce i metadati della seduta.
+SESSIONI = {".MI": ("Europe/Rome", "09:00", "17:30"), ".PA": ("Europe/Paris", "09:00", "17:30"),
+            ".AS": ("Europe/Amsterdam", "09:00", "17:30"), ".BR": ("Europe/Brussels", "09:00", "17:30"),
+            ".LS": ("Europe/Lisbon", "08:00", "16:30"), ".DE": ("Europe/Berlin", "09:00", "17:30"),
+            ".MC": ("Europe/Madrid", "09:00", "17:30"), ".L": ("Europe/London", "08:00", "16:30"),
+            ".SW": ("Europe/Zurich", "09:00", "17:30"), "US": ("America/New_York", "09:30", "16:00")}
+
+
+def sessione_standard(simbolo: str):
+    s = simbolo.upper()
+    if "." in s:
+        return SESSIONI.get("." + s.rsplit(".", 1)[1])
+    if s.isalpha():
+        return SESSIONI["US"]
+    return None
+
+
+def mercato_aperto(s: Serie, adesso: dt.datetime | None = None) -> tuple[bool | None, str]:
+    """(aperto?, fonte). Prima il periodo di negoziazione indicato da Yahoo;
+    se manca, l'orario standard della borsa (lun-ven, festivita' escluse)."""
     adesso = adesso or ora_roma()
+    now = pd.Timestamp(adesso).tz_convert("UTC")
     try:
         reg = s.meta["currentTradingPeriod"]["regular"]
-        start = pd.Timestamp(reg["start"], unit="s", tz="UTC") if not isinstance(reg["start"], pd.Timestamp) else reg["start"]
-        end = pd.Timestamp(reg["end"], unit="s", tz="UTC") if not isinstance(reg["end"], pd.Timestamp) else reg["end"]
-        now = pd.Timestamp(adesso).tz_convert("UTC")
-        return bool(start <= now < end)
+        ts = lambda v: v if isinstance(v, pd.Timestamp) else pd.Timestamp(v, unit="s", tz="UTC")
+        return bool(ts(reg["start"]) <= now < ts(reg["end"])), "periodo di negoziazione indicato da Yahoo"
     except Exception:
-        return None
+        pass
+    ses = sessione_standard(s.simbolo)
+    if not ses:
+        return None, "metadati Yahoo assenti e orario di borsa non noto"
+    tz, ini, fin = ses
+    loc = now.tz_convert(tz)
+    if loc.weekday() >= 5:
+        return False, f"orario standard {ini}-{fin} {tz} (metadati Yahoo assenti; festività non considerate)"
+    a = loc.normalize() + pd.Timedelta(ini + ":00")
+    b = loc.normalize() + pd.Timedelta(fin + ":00")
+    return bool(a <= loc < b), f"orario standard {ini}-{fin} {tz} (metadati Yahoo assenti; festività non considerate)"
+
+
+def ultimo_intraday(s: Serie):
+    """(prezzo, orario UTC, fonte) dell'ultimo prezzo intraday disponibile:
+    regularMarketPrice/regularMarketTime dei metadati Yahoo oppure, se
+    mancano, la chiusura dell'ultima barra a 30 minuti."""
+    p, t = s.meta.get("regularMarketPrice"), ultimo_orario(s)
+    if p is not None and t is not None:
+        return float(p), t, "Yahoo regularMarketPrice/regularMarketTime"
+    if not s.m30.empty:
+        r = s.m30.iloc[-1]
+        return float(r["Close"]), s.m30.index[-1].tz_convert("UTC"), "chiusura dell'ultima barra a 30 minuti (orario = inizio barra)"
+    return None, None, "né metadati né barre a 30 minuti disponibili"
 
 
 def ultimo_orario(s: Serie):

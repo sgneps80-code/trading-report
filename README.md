@@ -181,6 +181,12 @@ Se il browser chiede ogni volta dove salvare:
   (Parigi), `SNY` (USA), `EURUSD=X` (cambio), `GC=F` (oro, future COMEX in USD).
 - **Tipo** decide la compensabilità con lo zainetto fiscale (sì per azioni,
   ETC, obbligazioni, certificati; no per le plusvalenze degli ETF UCITS).
+- **Principale**: per i titoli quotati su più mercati (es. Sanofi: ordini su
+  `1SAN.MI`, mercato principale `SAN.PA`) l'analisi si fa sul principale e il
+  listino degli ordini compare tra gli strumenti collegati, con scarto di prezzo,
+  volumi e qualità del dato. Vuoto = automatico per i listini `1XXX.MI` con ISIN
+  (paese dell'ISIN → borsa: FR `.PA`, DE `.DE`, NL `.AS`, ES `.MC`, US nessun
+  suffisso…), usato solo se le chiusure dei due listini coincidono entro il 3%.
 - **Benchmark** vuoto = `FTSEMIB.MI` per `.MI`, `^FCHI` per `.PA`, `^GSPC` per gli USA.
 - **Collegati**: `SNY adr 0.5 EURUSD=X` (ADR: 2 ADR = 1 azione → 0.5 azioni
   per ADR) oppure `GC=F sottostante - EURUSD=X` (ETC oro). Più voci separate da `;`.
@@ -202,6 +208,17 @@ Se il browser chiede ogni volta dove salvare:
   memoria, lo scarica, lo decifra e lo salva. Nessuna password da inserire.
 
 ### Fonti e verifiche
+
+- **Qualità del dato**: il file segnala le barre incoerenti (apertura o chiusura
+  fuori da minimo–massimo), le stampe anomale (ombre oltre 3 ATR con volume
+  basso; per i listini di esecuzione, massimi/minimi fuori dal range del mercato
+  principale) e le esclude da swing, livelli ed estremi. Se mancano i metadati
+  Yahoo, anagrafica e valuta vengono dalla watchlist e lo stato del mercato
+  dall'orario standard della borsa; se a mercato aperto manca la seduta di oggi,
+  lo scrive in testa con l'ultimo prezzo intraday e l'orario.
+- **Statistiche condizionate** (dopo giorni oltre ±2 ATR, dopo RSI oltre 70/30,
+  chiusura dei gap) sempre affiancate dal tasso su tutti i giorni e
+  dall'intervallo di confidenza di Wilson al 95%.
 
 - Prezzi: Yahoo Finance via `yfinance` con `auto_adjust=False` (non aggiustati
   per i dividendi; dividendi e split elencati a parte). 30 minuti: Yahoo dà solo

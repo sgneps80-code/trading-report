@@ -22,22 +22,35 @@ class Pivot:
     etichetta: str = ""    # HH / LH / HL / LL / "" (primo della sua specie)
 
 
-def zigzag(df: pd.DataFrame, atr: pd.Series, mult: float) -> list[Pivot]:
+def _hl(df: pd.DataFrame, escludi: pd.Series | None):
+    """Massimi/minimi con NaN sulle barre da escludere (segnalate come anomale)."""
+    h, l = df["High"].to_numpy(float).copy(), df["Low"].to_numpy(float).copy()
+    if escludi is not None:
+        m = escludi.reindex(df.index).fillna(False).to_numpy(bool)
+        h[m], l[m] = np.nan, np.nan
+    return h, l
+
+
+def zigzag(df: pd.DataFrame, atr: pd.Series, mult: float, escludi: pd.Series | None = None) -> list[Pivot]:
     """ZigZag su massimi/minimi giornalieri.
     Un massimo diventa punto di swing quando, dopo di esso, il prezzo scende
     di almeno mult*ATR14 (ATR della barra del massimo); simmetrico per i
     minimi. L'ultimo estremo, non ancora confermato da un'inversione di
-    pari ampiezza, e' riportato come "provvisorio"."""
-    h, l = df["High"].to_numpy(float), df["Low"].to_numpy(float)
+    pari ampiezza, e' riportato come "provvisorio". Le barre in `escludi`
+    (incoerenti o con stampe anomale) sono saltate."""
+    h, l = _hl(df, escludi)
     a = atr.to_numpy(float)
     idx = df.index
-    start = int(np.argmax(~np.isnan(a))) if (~np.isnan(a)).any() else len(a)
+    valida = ~np.isnan(a) & ~np.isnan(h)
+    start = int(np.argmax(valida)) if valida.any() else len(a)
     piv: list[Pivot] = []
     if start >= len(a) - 1:
         return piv
     trend = 0
     hi = lo = start
     for i in range(start + 1, len(h)):
+        if np.isnan(h[i]):          # barra esclusa: non crea ne' conferma swing
+            continue
         if trend == 0:
             if h[i] > h[hi]:
                 hi = i
@@ -78,8 +91,10 @@ def zigzag(df: pd.DataFrame, atr: pd.Series, mult: float) -> list[Pivot]:
     return piv
 
 
-def estremi_periodo(df: pd.DataFrame, oggi: pd.Timestamp) -> dict:
-    """Massimo/minimo (High/Low) con data su finestre di calendario."""
+def estremi_periodo(df: pd.DataFrame, oggi: pd.Timestamp, escludi: pd.Series | None = None) -> dict:
+    """Massimo/minimo (High/Low) con data su finestre di calendario, escluse le barre segnalate."""
+    if escludi is not None:
+        df = df[~escludi.reindex(df.index).fillna(False).astype(bool)]
     out = {}
     for nome, off in (("1 settimana", pd.DateOffset(days=7)), ("1 mese", pd.DateOffset(months=1)),
                       ("3 mesi", pd.DateOffset(months=3)), ("52 settimane", pd.DateOffset(weeks=52))):
@@ -196,21 +211,24 @@ def doppi(piv: list[Pivot], df: pd.DataFrame, atr: pd.Series, tipo: str, tol_atr
 
 
 def rettangolo(df: pd.DataFrame, atr: pd.Series, max_alt_atr: float = 4.0, min_sedute: int = 15,
-               cerca_indietro: int = 60) -> dict | None:
+               cerca_indietro: int = 60, escludi: pd.Series | None = None) -> dict | None:
     """Base/rettangolo piu' recente: finestra di almeno `min_sedute` sedute
     il cui intervallo massimo-minimo non supera max_alt_atr * ATR14 della
     sua ultima seduta. Si cerca la finestra che termina piu' vicino a oggi
     (fino a `cerca_indietro` sedute fa), estesa all'indietro il piu' possibile."""
-    h, l, c = df["High"].to_numpy(float), df["Low"].to_numpy(float), df["Close"].to_numpy(float)
+    h, l = _hl(df, escludi)
+    c = df["Close"].to_numpy(float)
     a = atr.to_numpy(float)
     n = len(df)
     for e in range(n - 1, max(n - 1 - cerca_indietro, min_sedute), -1):
         if np.isnan(a[e]):
             break
+        if np.isnan(h[e]):
+            continue
         lim = max_alt_atr * a[e]
         top, bot, s = h[e], l[e], e
         while s - 1 >= 0:
-            t2, b2 = max(top, h[s - 1]), min(bot, l[s - 1])
+            t2, b2 = np.fmax(top, h[s - 1]), np.fmin(bot, l[s - 1])
             if t2 - b2 > lim:
                 break
             top, bot, s = t2, b2, s - 1
@@ -218,8 +236,9 @@ def rettangolo(df: pd.DataFrame, atr: pd.Series, max_alt_atr: float = 4.0, min_s
             continue
         alt = top - bot
         tol = 0.25 * a[e]
-        tocchi_sup = _episodi(h[s:e + 1] >= top - tol)
-        tocchi_inf = _episodi(l[s:e + 1] <= bot + tol)
+        with np.errstate(invalid="ignore"):
+            tocchi_sup = _episodi(h[s:e + 1] >= top - tol)
+            tocchi_inf = _episodi(l[s:e + 1] <= bot + tol)
         rottura = None
         for j in range(e + 1, n):
             if c[j] > top:

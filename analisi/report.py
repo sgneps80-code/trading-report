@@ -17,10 +17,11 @@ import pandas as pd
 
 from . import dati as D
 from . import indicatori as I
+from . import qualita as Q
 from . import statistiche as S
 from . import struttura as T
 
-VERSIONE = "1.0"
+VERSIONE = "1.1"
 
 KAMA_DEFAULT = [(10, 2, 30), (50, 2, 30)]
 
@@ -120,6 +121,9 @@ def benchmark_default(simbolo: str) -> str | None:
         return "FTSEMIB.MI"
     if s.endswith(".PA"):
         return "^FCHI"
+    for suf, idx in ((".DE", "^GDAXI"), (".AS", "^AEX"), (".MC", "^IBEX"), (".L", "^FTSE"), (".BR", "^BFX")):
+        if s.endswith(suf):
+            return idx
     if "." not in s and s.isalpha():
         return "^GSPC"
     return None
@@ -135,6 +139,7 @@ class Strumento:
     tipo: str = ""
     benchmark: str | None = None
     tv: str = ""
+    principale: str = ""          # simbolo Yahoo del mercato principale (es. SAN.PA per 1SAN.MI)
     collegati: list = field(default_factory=list)
     posizione: dict = field(default_factory=dict)
 
@@ -145,6 +150,7 @@ class Strumento:
             nome=d.get("nome", "") or "", isin=d.get("isin", "") or "", mercato=d.get("mercato", "") or "",
             valuta=(d.get("valuta", "") or "").upper(), tipo=(d.get("tipo", "") or "").lower(),
             benchmark=(d.get("benchmark") or "").strip().upper() or None, tv=(d.get("tv") or "").strip(),
+            principale=(d.get("principale") or "").strip().upper(),
             collegati=d.get("collegati") or [], posizione=d.get("posizione") or {},
         )
 
@@ -184,7 +190,14 @@ class Analisi:
         self.st, self.cfg, self.arch = st, cfg, arch
         self.zz_mult = float(cfg.get("zigzag_atr") or 1.5)
         self.kama_p = [tuple(int(v) for v in k) for k in (cfg.get("kama") or KAMA_DEFAULT)]
-        self.s = arch.get(st.simbolo, intraday=intraday, eventi=True)
+        # simbolo analizzato: il mercato principale, se il titolo ha un listino
+        # secondario (es. 1SAN.MI -> SAN.PA); il listino richiesto resta "di esecuzione"
+        self.sym, self.esec, self.conv, self.nota_principale, self.rapporto_principale = st.simbolo, None, None, None, None
+        cand = st.principale or Q.principale_da_isin(st.simbolo, st.isin)
+        if cand and cand != st.simbolo:
+            self._prova_principale(cand)
+        if self.sym == st.simbolo:
+            self.s = arch.get(st.simbolo, intraday=True, eventi=True)
         self.ok = self.s.ok and len(self.s.giornaliero) >= 30
         if self.s.ok and not self.ok:
             self.s.errori["giornaliero"] = f"storico insufficiente: {len(self.s.giornaliero)} sedute (minimo 30)"
@@ -199,11 +212,18 @@ class Analisi:
         self.dp = decimali_dati(pd.concat([ult["Open"], ult["High"], ult["Low"], ult["Close"]]))
         self.atr_now = float(self.atr.iloc[-1]) if not _nan(self.atr.iloc[-1]) else None
         self.oggi = self.df.index[-1]
-        self.aperto = D.mercato_aperto(self.s)
-        self.incompleta = bool(self.aperto) and fdata(self.oggi) == D.ora_roma().strftime("%Y-%m-%d")
-        self.pivot = T.zigzag(self.df, self.atr, self.zz_mult)
-        self.pivot_magg = T.zigzag(self.df, self.atr, max(3.0, 2 * self.zz_mult))
-        self.valuta = st.valuta or (self.s.meta.get("currency") or "").upper()
+        self.aperto, self.fonte_aperto = D.mercato_aperto(self.s)
+        oggi_str = D.ora_roma().strftime("%Y-%m-%d")
+        self.incompleta = bool(self.aperto) and fdata(self.oggi) == oggi_str
+        self.manca_oggi = bool(self.aperto) and fdata(self.oggi) < oggi_str
+        self.intraday = D.ultimo_intraday(self.s)
+        # qualita' del dato: barre segnalate, escluse da swing/estremi/rettangoli
+        self.incoer = Q.incoerenti(self.df)
+        self.ombre = Q.ombre_anomale(self.df, self.atr, self.ind["Vol20"])
+        self.escludi = self.incoer | self.ombre
+        self.pivot = T.zigzag(self.df, self.atr, self.zz_mult, self.escludi)
+        self.pivot_magg = T.zigzag(self.df, self.atr, max(3.0, 2 * self.zz_mult), self.escludi)
+        self.valuta, self.valuta_fonte = self._valuta()
         d10 = S.finestra_10_anni(self.df)
         self.d10, self.atr10, self.rsi10 = d10, self.atr.loc[d10.index], self.ind["RSI14"].loc[d10.index]
         anno = self.oggi - pd.DateOffset(months=12)
@@ -232,25 +252,112 @@ class Analisi:
             return None
         return float(vol.iloc[-1 - k] / v20.iloc[-2 - k])
 
-    def pref(self) -> str:
-        return ""
+    def _valuta(self):
+        cur = (self.s.meta.get("currency") or "").upper()
+        if self.esec is None:
+            if self.st.valuta:
+                return self.st.valuta, "watchlist"
+            return (cur, "Yahoo") if cur else ("", "n.d.")
+        if cur:
+            return cur, "Yahoo"
+        if self.conv is None and self.ccy_esec:
+            return self.ccy_esec, f"come il listino {self.st.simbolo} (rapporto prezzi ≈ 1 senza cambio)"
+        return "", "n.d."
+
+    def _prova_principale(self, cand: str):
+        """Usa il mercato principale `cand` se i prezzi confermano che e' lo stesso
+        titolo (chiusure entro ±3% sulle ultime 20 sedute comuni, al netto del
+        cambio se le valute differiscono). Se indicato a mano nella watchlist si
+        usa comunque, segnalando lo scarto."""
+        L = self.arch.get(self.st.simbolo, intraday=True, eventi=False)
+        P = self.arch.get(cand, intraday=True, eventi=True)
+        manuale = bool(self.st.principale)
+        if not P.ok or len(P.giornaliero) < 30:
+            self.nota_principale = f"mercato principale {cand} non utilizzabile: {P.errori.get('giornaliero', 'storico insufficiente')}"
+            return
+        self.ccy_esec = (self.st.valuta or L.meta.get("currency") or "").upper()
+        ccy_p = (P.meta.get("currency") or "").upper()
+        conv = None
+        if self.ccy_esec and ccy_p and self.ccy_esec != ccy_p:
+            fx = self.arch.get(f"{ccy_p}{self.ccy_esec}=X")
+            if not fx.ok:
+                self.nota_principale = f"mercato principale {cand}: cambio {ccy_p}{self.ccy_esec}=X non disponibile"
+                return
+            conv = fx.giornaliero["Close"]
+        if L.ok:
+            pc = P.giornaliero["Close"] * (conv if conv is not None else 1)
+            comuni = L.giornaliero.index.intersection(pc.dropna().index)[-20:]
+            if len(comuni):
+                self.rapporto_principale = (float((L.giornaliero["Close"][comuni] / pc[comuni]).median()), len(comuni))
+        r = self.rapporto_principale
+        verificato = r is not None and abs(r[0] - 1) <= 0.03
+        if not verificato and not manuale:
+            self.nota_principale = (f"candidato mercato principale {cand} scartato: "
+                                    + (f"rapporto mediano dei prezzi {r[0]:.4f} su {r[1]} sedute" if r else "nessuna seduta in comune")
+                                    + f"; analisi sul listino richiesto {self.st.simbolo}")
+            return
+        self.sym, self.s, self.esec, self.conv = cand, P, L, conv
+        self.principale_verificato = verificato
+
+    def flag_righe(self, serie: pd.Series, ultime: int = 260) -> tuple[int, list]:
+        x = serie.iloc[-ultime:]
+        return int(x.sum()), list(x[x].index)
+
+    def avvisi_testa(self) -> list[str]:
+        """Avvisi da mettere in testa al file (o del blocco di sintesi)."""
+        av = []
+        if self.esec is not None:
+            r = self.rapporto_principale
+            av.append(f"Analisi sul **mercato principale {self.sym}**; il listino richiesto **{self.st.simbolo}** "
+                      f"(dove si eseguono gli ordini) è nella sezione Strumenti collegati con lo scarto di prezzo"
+                      + (f" (rapporto mediano dei prezzi {r[0]:.4f} su {r[1]} sedute)" if r else "")
+                      + ("." if getattr(self, "principale_verificato", True) else
+                         " — ATTENZIONE: principale indicato a mano ma lo scarto supera il 3%."))
+        if self.nota_principale:
+            av.append(self.nota_principale + ".")
+        if self.incompleta:
+            av.append("Mercato aperto: l'ultima barra giornaliera (e settimanale) è INCOMPLETA; volume parziale.")
+        if self.manca_oggi:
+            p, t, fonte = self.intraday
+            av.append(f"Mercato aperto ({self.fonte_aperto}) ma la seduta di oggi MANCA nei dati giornalieri: l'ultima barra è del "
+                      f"{fdata(self.oggi)} e tutti gli indicatori si fermano lì. Ultimo prezzo intraday: "
+                      + (f"{self.p(p)} alle {D.fmt_ora(t)} ({fonte})." if p is not None else nd(fonte) + "."))
+        k, dd = self.flag_righe(self.incoer)
+        if k:
+            av.append(f"{k} barre giornaliere incoerenti su {min(260, len(self.df))} (apertura o chiusura fuori da minimo-massimo): "
+                      "escluse dagli swing; elenco nell'anagrafica.")
+        k, dd = self.flag_righe(self.ombre)
+        if k:
+            av.append(f"{k} barre con ombra oltre 3 ATR e volume basso (stampe anomale) nelle ultime 260: escluse dagli swing.")
+        if "meta" in self.s.errori:
+            av.append(f"Metadati Yahoo non disponibili ({self.s.errori['meta']}): anagrafica e valuta dalla watchlist.")
+        return av
 
     # ─── sezioni ─────────────────────────────────────────────────────────────
 
     def sez_anagrafica(self, n: int) -> str:
         st, s, m = self.st, self.s, self.s.meta
         tipo = st.tipo or (m.get("instrumentType") or "").lower()
+        mercato = (m.get("fullExchangeName") or m.get("exchangeName")) if m else None
+        mercato = f"{mercato} (Yahoo)" if mercato else (f"{Q.nome_mercato(self.sym)} (dal suffisso del simbolo)"
+                                                          if Q.nome_mercato(self.sym) else None)
+        if self.esec is None and st.mercato:
+            mercato = f"{st.mercato} (watchlist)"
+        def elenco(serie):
+            k, dd = self.flag_righe(serie)
+            return f"{k}" + (f": {', '.join(fdata(x) for x in dd[:10])}" + (" …" if k > 10 else "") if k else "")
         zain = TIPI_ZAINETTO.get(st.tipo, nd("tipo non indicato nella watchlist") if not st.tipo else "da verificare: tipo non standard")
         ult = self.df.iloc[-260:]
         attese = pd.bdate_range(ult.index[0], ult.index[-1])
         mancanti = [d for d in attese if d not in ult.index]
         vol0 = int((ult["Volume"] == 0).sum())
         righe = [
-            ["Nome", st.nome or m.get("longName") or m.get("shortName") or nd("non indicato")],
-            ["Simbolo (Yahoo)", st.simbolo],
+            ["Nome", st.nome or m.get("longName") or m.get("shortName") or nd("né in watchlist né nei metadati Yahoo")],
+            ["Simbolo analizzato (Yahoo)", self.sym + (" — mercato principale" if self.esec is not None else "")],
+            ["Listino di esecuzione", f"{st.simbolo} (vedi Strumenti collegati)" if self.esec is not None else "lo stesso"],
             ["ISIN", st.isin or nd("non indicato nella watchlist")],
-            ["Mercato", st.mercato or f"{m.get('fullExchangeName') or m.get('exchangeName') or nd()} (da Yahoo)"],
-            ["Valuta", f"{self.valuta or nd()}" + ("" if st.valuta else " (da Yahoo)")],
+            ["Mercato", mercato or nd("né in watchlist né nei metadati Yahoo")],
+            ["Valuta", f"{self.valuta} ({self.valuta_fonte})" if self.valuta else nd("né in watchlist né nei metadati Yahoo")],
             ["Tipo", st.tipo or f"{tipo or nd()} (da Yahoo)"],
             ["Compensabile con lo zainetto fiscale", zain],
             ["Ultima seduta presente", fdata(self.oggi) + (" — barra INCOMPLETA (mercato aperto)" if self.incompleta else "")],
@@ -259,6 +366,9 @@ class Analisi:
              f"{len(mancanti)}" + (f": {', '.join(fdata(x) for x in mancanti[:12])}" + (" …" if len(mancanti) > 12 else "") if mancanti else "")
              + " (include le festività di borsa: non distinguibili senza calendario ufficiale)"],
             ["Sedute con volume 0 (ultime 260)", str(vol0)],
+            ["Barre incoerenti (O o C fuori da L–H), ultime 260 — escluse dagli swing", elenco(self.incoer)],
+            ["Ombre > 3 ATR con volume < 0.5× media, ultime 260 — escluse dagli swing", elenco(self.ombre)],
+            ["Metadati Yahoo", "presenti" if m and "meta" not in s.errori else nd(s.errori.get("meta", "vuoti")) + "; campi dalla watchlist"],
             ["Fonte", f"{s.fonte}, scaricato {D.fmt_ora(s.scaricato_alle)}"],
         ]
         err = {k: v for k, v in s.errori.items()}
@@ -279,9 +389,12 @@ class Analisi:
             ["Variazione", f"{self.ultimo - prev:+.{self.dp}f} ({(self.ultimo / prev - 1) * 100:+.2f}%)" if prev else nd()],
             ["Volume", fvol(r["Volume"]) + (" (parziale)" if self.incompleta else "")],
             ["Volume relativo (vol / media 20 sedute precedenti)", fn(self.vol_rel()) + (" (su volume parziale)" if self.incompleta else "")],
-            ["Stato mercato alla generazione", {True: "APERTO — l'ultima barra giornaliera è incompleta", False: "chiuso",
-                                               None: nd("periodo di negoziazione assente nei metadati Yahoo")}[self.aperto]],
+            ["Stato mercato alla generazione", {True: "APERTO", False: "chiuso", None: "n.d."}[self.aperto] + f" ({self.fonte_aperto})"
+             + (" — ultima barra giornaliera incompleta" if self.incompleta else "")
+             + (" — SEDUTA DI OGGI ASSENTE nei dati giornalieri" if self.manca_oggi else "")],
         ]
+        p_i, t_i, f_i = self.intraday
+        righe.insert(2, ["Ultimo prezzo intraday", f"{self.p(p_i)} alle {D.fmt_ora(t_i)} ({f_i})" if p_i is not None else nd(f_i)])
         return f"## {n}. Prezzo\n\n" + tabella(["Campo", "Valore"], righe)
 
     def sez_indicatori(self, n: int, sintesi: bool = False) -> str:
@@ -298,7 +411,7 @@ class Analisi:
         osc = [("RSI14", "RSI 14", 2), ("StochK", "Stoc. %K (14,3)", 2), ("StochD", "Stoc. %D (3)", 2),
                ("MACD", "MACD (12,26)", 4), ("MACDsig", "Segnale MACD (9)", 4), ("MACDhist", "Istogramma MACD", 4),
                ("ADX", "ADX 14", 2), ("+DI", "+DI 14", 2), ("-DI", "-DI 14", 2),
-               ("ATR14", f"ATR 14 ({self.valuta})", self.dp), ("ATR%", "ATR 14 % del prezzo", 2),
+               ("ATR14", f"ATR 14 ({self.valuta or 'valuta n.d.'})", self.dp), ("ATR%", "ATR 14 % del prezzo", 2),
                ("BBsup", "Bollinger superiore", self.dp), ("BBbase", "Bollinger base (SMA20)", self.dp),
                ("BBinf", "Bollinger inferiore", self.dp), ("BB%B", "Bollinger %B", 3), ("BBlarg%", "Bollinger larghezza %", 2),
                ("Vol20", "Volume medio 20", 0), ("Vol50", "Volume medio 50", 0)]
@@ -310,12 +423,11 @@ class Analisi:
 
     def sez_struttura(self, n: int, n_swing: int = 12) -> str:
         piv = self.pivot[-n_swing:]
-        righe = [[fdata(p.data), "massimo" if p.tipo == "H" else "minimo", self.p(p.prezzo), p.etichetta or "—",
-                  "sì" if p.confermato else "provvisorio", self.d(p.prezzo)] for p in piv]
+        righe = [[fdata(p.data), "massimo" if p.tipo == "H" else "minimo", self.p(p.prezzo),
+                  (p.etichetta or "—") + ("" if p.confermato else " (provv.)"), self.d(p.prezzo)] for p in piv]
         out = [f"## {n}. Struttura\n",
-               f"Punti di swing (ZigZag, soglia {self.zz_mult} × ATR14), ultimi {len(piv)}; etichetta rispetto allo swing precedente dello stesso tipo "
-               "(HH massimo crescente, LH massimo decrescente, HL minimo crescente, LL minimo decrescente):\n",
-               tabella(["Data", "Tipo", "Prezzo", "Etichetta", "Confermato", "Distanza dal prezzo"], righe) if righe else nd("swing insufficienti")]
+               f"Punti di swing (ZigZag {self.zz_mult} × ATR14, barre segnalate escluse), ultimi {len(piv)}:\n",
+               tabella(["Data", "Tipo", "Prezzo", "Etichetta", "Distanza dal prezzo"], righe) if righe else nd("swing insufficienti")]
         hs = [p for p in self.pivot if p.tipo == "H" and p.etichetta][-4:]
         ls = [p for p in self.pivot if p.tipo == "L" and p.etichetta][-4:]
         out.append(f"\nSequenza ultimi massimi: {' → '.join(p.etichetta for p in hs) or 'n.d.'}; "
@@ -324,14 +436,14 @@ class Analisi:
         lh = next((p for p in reversed(self.pivot) if p.etichetta == "LH"), None)
         out.append(f"Ultimo minimo crescente (HL): {f'{self.p(hl.prezzo)} del {fdata(hl.data)}, distanza {self.d(hl.prezzo)}' if hl else 'nessuno nello storico'}.")
         out.append(f"Ultimo massimo decrescente (LH): {f'{self.p(lh.prezzo)} del {fdata(lh.data)}, distanza {self.d(lh.prezzo)}' if lh else 'nessuno nello storico'}.")
-        est = T.estremi_periodo(self.df, self.oggi)
+        est = T.estremi_periodo(self.df, self.oggi, self.escludi)
         r2 = []
         for k, e in est.items():
             if e is None:
                 r2.append([k, "n.d.", "", "n.d.", "", ""])
             else:
                 r2.append([k, self.p(e["max"]), fdata(e["data_max"]), self.p(e["min"]), fdata(e["data_min"]), e["n"]])
-        out += ["\nMassimi e minimi (finestre di calendario fino all'ultima seduta):\n",
+        out += ["\nMassimi e minimi (finestre di calendario fino all'ultima seduta; escluse le barre segnalate):\n",
                 tabella(["Periodo", "Massimo", "Data", "Minimo", "Data", "n sedute"], r2)]
         return "\n".join(out)
 
@@ -374,6 +486,8 @@ class Analisi:
         i = g["i"]
         d, prev = self.df.index[i], self.df.index[i - 1]
         note = []
+        if self.escludi.iloc[i] or self.escludi.iloc[i - 1]:
+            note.append("barra segnalata come anomala")
         if d in self.dividendi.index:
             note.append(f"stacco dividendo {self.dividendi.loc[d]:g}")
         if self.s.date_conti:
@@ -430,7 +544,7 @@ class Analisi:
                        f"il secondo è {rel} del primo di {fn(abs(f['diff']), self.dp)} ({fn(abs(f['diff_atr']))} ATR); "
                        f"livello intermedio rotto in chiusura: {rotto}; distanza dell'intermedio dal prezzo: {self.d(mid.prezzo)}; "
                        f"altezza della figura {fn(f['altezza'], self.dp)}.")
-        r = T.rettangolo(self.df, self.atr)
+        r = T.rettangolo(self.df, self.atr, escludi=self.escludi)
         if r:
             rott = f"sì, al {r['rottura'][0]} con la chiusura del {fdata(r['rottura'][1])}" if r["rottura"] else "no"
             out.append(f"- **Base/rettangolo** (≥15 sedute con altezza ≤ 4 ATR14): {fdata(r['inizio'])} → {fdata(r['fine'])} "
@@ -460,7 +574,7 @@ class Analisi:
         vol = S.volatilita(d["Close"])
         out.append("Deviazione standard dei rendimenti giornalieri (chiusura su chiusura, %): "
                    + "; ".join(f"{k} sedute = {fn(vol[k][0])}% (n={vol[k][1]})" for k in (20, 60, 250)) + ".")
-        out.append(f"Giorni con variazione oltre ±3%: {fn(vol['oltre3'][0])}% (oltre +3%: {fn(vol['su3'])}%, oltre −3%: {fn(vol['giu3'])}%; n={vol['oltre3'][1]}).")
+        out.append(f"Giorni con variazione oltre ±3%: {fn(vol['oltre3'][0])}% IC95 {Q.fmt_ic(vol['oltre3_ic'])} (oltre +3%: {fn(vol['su3'])}%, oltre −3%: {fn(vol['giu3'])}%; n={vol['oltre3'][1]}).")
         esc = S.escursioni(d, self.atr10)
         hz_list = (10,) if sintesi else S.ORIZZONTI
         righe = []
@@ -476,26 +590,35 @@ class Analisi:
         out += ["\nEscursione massima entro h sedute (massimo dei massimi / minimo dei minimi successivi rispetto alla chiusura di partenza):\n",
                 tabella(["Orizzonte"] + [f"p{p}" for p in S.PERCENTILI] + ["n"], righe)]
         if not sintesi:
-            cg = S.chiusura_gap(self.gap10_1atr, len(d))
-            out.append(f"\nGap > 1 ATR14 nel periodo: {len(self.gap10_1atr)}. Chiusi entro: "
-                       + "; ".join(f"{hz} sedute {fn(cg[hz][0], 1)}% (n={cg[hz][1]})" for hz in S.ORIZZONTI) + ".")
+            out.append("\nIC95 = intervallo di Wilson al 95% sulla quota di positivi (o di chiusure), calcolato come se le osservazioni "
+                       "fossero indipendenti: con eventi ravvicinati e finestre sovrapposte è più stretto del vero.")
+            cg = S.chiusura_gap(self.gap10_1atr, d, self.atr10)
+            rg = [[f"{hz}s", cg[hz]["n"], f"{fn(cg[hz]['pct'], 1)}% {Q.fmt_ic(cg[hz]['ic'])}",
+                   f"{fn(cg[hz]['atteso'], 1)}% {Q.fmt_ic(cg[hz]['ic_atteso'])}", cg[hz]["n_sedute"]] for hz in S.ORIZZONTI]
+            out += [f"\nGap > 1 ATR14 nel periodo: {len(self.gap10_1atr)}. Chiusura entro h sedute; tasso atteso = frequenza, su tutte le sedute, "
+                    "di un movimento contrario almeno pari alla distanza (in ATR) tra la chiusura del giorno del gap e il bordo da richiudere:\n",
+                    tabella(["Entro", "n gap", "Chiusi % IC95", "Tutti i giorni: tasso atteso % IC95", "n sedute"], rg)]
+
+            def riga(nome, hz, x):
+                if not x.get("n"):
+                    return [nome, f"{hz}s", 0, "n.d.", "n.d.", "n.d."]
+                return [nome, f"{hz}s", x["n"], fn(x.get("media"), 2, True), fn(x.get("mediana"), 2, True),
+                        f"{fn(x.get('pos'), 1)} {Q.fmt_ic(x.get('ic'))}"]
+            testa = ["Evento", "Orizz.", "n", "Media %", "Mediana %", "% positivi IC95"]
             ga = S.dopo_giorni_ampi(d, self.atr10)
+            base = {hz: S.incondizionato(d["Close"], hz) for hz in S.ORIZZONTI}
             r2 = []
-            for nome, k in (("dopo > +2 ATR", "su"), ("dopo < −2 ATR", "giu")):
-                for hz in S.ORIZZONTI:
-                    x = ga[k][hz]
-                    r2.append([nome, f"{hz}s", x["n"], fn(x.get("media"), 2, True), fn(x.get("mediana"), 2, True), fn(x.get("pos"), 1)])
-            out += ["\nRendimenti (chiusura su chiusura, %) dopo sedute con variazione oltre ±2 ATR14 (della seduta precedente); "
-                    "gli eventi ravvicinati si sovrappongono:\n", tabella(["Evento", "Orizzonte", "n", "Media %", "Mediana %", "% positivi"], r2)]
+            for hz in S.ORIZZONTI:
+                r2 += [riga("tutti i giorni", hz, base[hz]), riga("dopo > +2 ATR", hz, ga["su"][hz]), riga("dopo < −2 ATR", hz, ga["giu"][hz])]
+            out += ["\nRendimenti (chiusura su chiusura, %) dopo sedute con variazione oltre ±2 ATR14 (della seduta precedente), "
+                    "con la riga \"tutti i giorni\" come confronto:\n", tabella(testa, r2)]
             rr = S.dopo_rsi(d["Close"], self.rsi10)
-            r3 = [[k, x["n"], fn(x.get("media"), 2, True), fn(x.get("mediana"), 2, True), fn(x.get("pos"), 1)]
-                  for k, x in (("RSI entra sopra 70", rr["sopra70"]), ("RSI entra sotto 30", rr["sotto30"]))]
-            out += ["\nRendimenti a 10 sedute dal giorno in cui l'RSI14 entra nella zona:\n",
-                    tabella(["Evento", "n", "Media %", "Mediana %", "% positivi"], r3)]
+            r3 = [riga("tutti i giorni", 10, base[10]), riga("RSI entra sopra 70", 10, rr["sopra70"]), riga("RSI entra sotto 30", 10, rr["sotto30"])]
+            out += ["\nRendimenti a 10 sedute dal giorno in cui l'RSI14 entra nella zona:\n", tabella(testa, r3)]
         return "\n".join(out)
 
     def sez_forza_relativa(self, n: int) -> str:
-        bm = self.st.benchmark or benchmark_default(self.st.simbolo)
+        bm = self.st.benchmark or benchmark_default(self.sym)
         if not bm:
             return f"## {n}. Forza relativa\n\n{nd('nessun benchmark indicato nella watchlist')}"
         b = self.arch.get(bm)
@@ -514,10 +637,62 @@ class Analisi:
                 "Valute non convertite.\n\n"
                 + tabella(["Periodo", "Strumento %", "Rif. strum.", "Benchmark %", "Rif. bench.", "Differenza pp", "Rapporto %"], righe))
 
+    def blocco_esecuzione(self, righe_max: int = 10, sintesi: bool = False) -> str:
+        """Listino di esecuzione (es. 1SAN.MI) rispetto al mercato principale analizzato."""
+        L, P, simL = self.esec, self.s, self.st.simbolo
+        out = [f"**Listino di esecuzione {simL}** rispetto al mercato principale {self.sym}"
+               + (f" (prezzi del principale convertiti con {self.conv.name if hasattr(self.conv, 'name') else 'cambio'})" if self.conv is not None else "")
+               + ". Scarto = listino / principale − 1."]
+        if not L.ok:
+            out.append(nd(f"nessun dato giornaliero per {simL}: {L.errori.get('giornaliero', 'serie vuota')}"))
+            return "\n\n".join(out)
+        lp, tl, fl = D.ultimo_intraday(L)
+        pp, tp, fp_ = self.intraday
+        if lp is not None and pp is not None:
+            f = float(self.conv.iloc[-1]) if self.conv is not None else 1.0
+            out.append(f"Ultimi prezzi: {simL} {self.p(lp)} alle {D.fmt_ora(tl)}; {self.sym} {self.p(pp)} alle {D.fmt_ora(tp)}; "
+                       f"scarto {(lp / (pp * f) - 1) * 100:+.2f}% (orari diversi = scarto non simultaneo).")
+        Ld, Pd = L.giornaliero, P.giornaliero
+        f = self.conv.reindex(Pd.index).ffill() if self.conv is not None else pd.Series(1.0, index=Pd.index)
+        pc = Pd["Close"] * f
+        comuni = Ld.index.intersection(pc.dropna().index)
+        if not len(comuni):
+            out.append(nd("nessuna seduta in comune"))
+            return "\n\n".join(out)
+        sc = (Ld["Close"][comuni] / pc[comuni] - 1) * 100
+        s60 = sc.iloc[-60:]
+        v60L, v60P = Ld["Volume"][comuni].iloc[-60:], Pd["Volume"][comuni].iloc[-60:]
+        out.append(f"Scarto delle chiusure sulle ultime {len(s60)} sedute comuni: mediana {s60.median():+.2f}%, "
+                   f"p5 {s60.quantile(0.05):+.2f}%, p95 {s60.quantile(0.95):+.2f}%, max assoluto {s60.abs().max():.2f}%. "
+                   f"Volume mediano {fvol(v60L.median())} su {simL} contro {fvol(v60P.median())} su {self.sym}; "
+                   f"sedute con volume 0 su {simL}: {int((v60L == 0).sum())} di {len(v60L)}.")
+        if not sintesi:
+            righe = [[fdata(d0), self.p(Ld['Close'][d0]), self.p(pc[d0]), fn(sc[d0], 2, True), fvol(Ld['Volume'][d0]), fvol(Pd['Volume'][d0])]
+                     for d0 in comuni[-righe_max:]]
+            out.append(tabella(["Data", f"Chiusura {simL}", f"Chiusura {self.sym}", "Scarto %", f"Vol. {simL}", f"Vol. {self.sym}"], righe))
+        # qualita' del listino di esecuzione
+        inc = Q.incoerenti(Ld).iloc[-260:]
+        atrP = self.atr
+        fuori = Q.fuori_principale(Ld.iloc[-260:], Pd, atrP, f if self.conv is not None else None)
+        aL = I.atr(Ld["High"], Ld["Low"], Ld["Close"])
+        omb = Q.ombre_anomale(Ld, aL, I.sma(Ld["Volume"].astype(float), 20)).iloc[-260:]
+        out.append(f"Qualità di {simL} (ultime {len(inc)} sedute): barre incoerenti (O o C fuori da L–H) {int(inc.sum())}"
+                   + (f" — {', '.join(fdata(x) for x in inc[inc].index[-8:])}" + (" e precedenti" if inc.sum() > 8 else "") if inc.sum() else "")
+                   + f"; massimi/minimi oltre il range del principale di più di 0.5 ATR {len(fuori)}"
+                   + (" — " + ", ".join(f"{fdata(i)} ({'max' if r.oltre_max_atr > 0.5 else 'min'} "
+                                        f"{max(r.oltre_max_atr, r.oltre_min_atr):.1f} ATR)" for i, r in fuori.iloc[-8:].iterrows())
+                      if len(fuori) else "")
+                   + f"; ombre > 3 ATR con volume basso {int(omb.sum())}. Queste stampe NON entrano nell'analisi, fatta su {self.sym}.")
+        return "\n\n".join(out)
+
     def sez_collegati(self, n: int, righe_max: int = 6) -> str:
-        if not self.st.collegati:
-            return f"## {n}. Strumenti collegati\n\nNessuno indicato nella watchlist."
         out = [f"## {n}. Strumenti collegati\n"]
+        if self.esec is not None:
+            out.append(self.blocco_esecuzione() + "\n")
+        if not self.st.collegati:
+            if self.esec is None:
+                out.append("Nessuno indicato nella watchlist.")
+            return "\n".join(out)
         loc = self.c
         for cg in self.st.collegati:
             sym = str(cg.get("simbolo", "")).upper()
@@ -564,17 +739,17 @@ class Analisi:
                 out.append(f"Rapporto: 1 ADR = {rap:g} azioni. Prezzo implicito dell'azione = ADR / {rap:g}"
                            + (f" / {fx_sym}" if fx is not None else "") + ". Chiusure giornaliere non simultanee "
                            "(Parigi/Milano 17:30, New York 22:00 ora italiana): lo scarto include il movimento tra i due orari.\n")
-                out.append(tabella(["Data", f"{sym}", fx_sym or "cambio", "Implicito", self.st.simbolo, "Premio locale %"], righe))
+                out.append(tabella(["Data", f"{sym}", fx_sym or "cambio", "Implicito", self.sym, "Premio locale %"], righe))
             else:
                 for d0 in sel:
                     sott = xc[d0] / (fx[d0] if fx is not None else 1)
                     righe.append([fdata(d0), self.p(loc[d0]), fp(xc[d0]), fn(fx[d0], 5) if fx is not None else "—",
                                   fp(sott), f"{loc[d0] / sott:.6f}"])
                 ult = righe[-1][-1]
-                out.append(f"Rapporto implicito R = prezzo {self.st.simbolo} / (sottostante" + (f" / {fx_sym})" if fx is not None else ")")
-                           + f". Per riconvertire un livello del sottostante: livello_{self.st.simbolo} = livello_{sym}"
+                out.append(f"Rapporto implicito R = prezzo {self.sym} / (sottostante" + (f" / {fx_sym})" if fx is not None else ")")
+                           + f". Per riconvertire un livello del sottostante: livello_{self.sym} = livello_{sym}"
                            + (f" / {fx_sym}" if fx is not None else "") + f" × R (ultimo R = {ult}). Chiusure non simultanee.\n")
-                out.append(tabella(["Data", self.st.simbolo, sym, fx_sym or "cambio", "Sottostante conv.", "R"], righe))
+                out.append(tabella(["Data", self.sym, sym, fx_sym or "cambio", "Sottostante conv.", "R"], righe))
         return "\n".join(out)
 
     def sez_eventi(self, n: int, sintesi: bool = False) -> str:
@@ -603,10 +778,16 @@ class Analisi:
         q = p.get("quantita")
         if not q:
             return None
-        fx, fx_sym, fx_data = fx_eur(self.arch, self.valuta)
-        cv = q * self.ultimo
+        prezzo, valuta, fonte = self.ultimo, self.valuta, f"ultima chiusura {self.sym} del {fdata(self.oggi)}"
+        if self.esec is not None and self.esec.ok:
+            Ld = self.esec.giornaliero
+            prezzo, valuta = float(Ld["Close"].iloc[-1]), self.ccy_esec or self.valuta
+            fonte = f"ultima chiusura del listino di esecuzione {self.st.simbolo} del {fdata(Ld.index[-1])}"
+        fx, fx_sym, fx_data = fx_eur(self.arch, valuta)
+        cv = q * prezzo
         res = {"q": float(q), "carico": p.get("carico"), "stop": p.get("stop"), "target": p.get("target"),
-               "uscita": p.get("uscita"), "cv": cv, "cv_eur": cv / fx if fx else None, "fx": fx, "fx_sym": fx_sym, "fx_data": fx_data}
+               "uscita": p.get("uscita"), "cv": cv, "cv_eur": cv / fx if fx else None, "fx": fx, "fx_sym": fx_sym, "fx_data": fx_data,
+               "prezzo": prezzo, "valuta": valuta, "fonte": fonte}
         return res
 
     def sez_posizione(self, n: int, totali: dict | None) -> str:
@@ -615,21 +796,24 @@ class Analisi:
             return f"## {n}. Posizione\n\nNessuna posizione indicata."
         out = [f"## {n}. Posizione\n"]
         car, stop, tgt = x["carico"], x["stop"], x["target"]
-        righe = [["Quantità", f"{x['q']:g}"],
+        pz = x["prezzo"]
+        dd = lambda liv: dist(pz, liv, self.atr_now)
+        righe = [["Prezzo usato", f"{self.p(pz)} {x['valuta']} ({x['fonte']}); distanze in ATR14 di {self.sym}"],
+                 ["Quantità", f"{x['q']:g}"],
                  ["Prezzo di carico", self.p(car) if car else nd("non indicato")],
-                 ["Controvalore", f"{x['cv']:.2f} {self.valuta}" + (f" = {x['cv_eur']:.2f} EUR (cambio {x['fx_sym']} {x['fx']:.5f} del {x['fx_data']})"
+                 ["Controvalore", f"{x['cv']:.2f} {x['valuta']}" + (f" = {x['cv_eur']:.2f} EUR (cambio {x['fx_sym']} {x['fx']:.5f} del {x['fx_data']})"
                                                                      if x["fx_sym"] and x["cv_eur"] else "")],
                  ]
         if car:
-            righe.append(["Risultato dal carico", f"{(self.ultimo / car - 1) * 100:+.2f}% ({(self.ultimo - car) * x['q']:+.2f} {self.valuta})"])
+            righe.append(["Risultato dal carico", f"{(pz / car - 1) * 100:+.2f}% ({(pz - car) * x['q']:+.2f} {x['valuta']})"])
         if totali and x["cv_eur"]:
             righe.append(["Peso sul totale investito", f"{x['cv_eur'] / totali['investito'] * 100:.2f}%" if totali["investito"] else "n.d."])
             righe.append(["Peso sul conto (investito + liquidità)", f"{x['cv_eur'] / totali['conto'] * 100:.2f}%"
                           if totali.get("conto") else nd("liquidità non indicata")])
-        righe.append(["Stop", f"{self.p(stop)} — distanza {self.d(stop)}" if stop else nd("non indicato")])
-        righe.append(["Target", f"{self.p(tgt)} — distanza {self.d(tgt)}" if tgt else nd("non indicato")])
-        if stop and tgt and self.ultimo != stop:
-            rr = (tgt - self.ultimo) / (self.ultimo - stop)
+        righe.append(["Stop", f"{self.p(stop)} — distanza {dd(stop)}" if stop else nd("non indicato")])
+        righe.append(["Target", f"{self.p(tgt)} — distanza {dd(tgt)}" if tgt else nd("non indicato")])
+        if stop and tgt and pz != stop:
+            rr = (tgt - pz) / (pz - stop)
             righe.append(["Rendimento/rischio dal prezzo attuale", f"{rr:.2f} = (target − prezzo) / (prezzo − stop)"])
         if x["uscita"]:
             try:
@@ -644,7 +828,8 @@ class Analisi:
     def confronto_tv(self):
         """(ticker, righe [nome, tv, calcolato], errore) - una sola chiamata per strumento."""
         if not hasattr(self, "_tv"):
-            cand = list(dict.fromkeys(([self.st.tv] if self.st.tv else []) + D.simbolo_tv_default(self.st.simbolo)))
+            mio_tv = [self.st.tv] if self.st.tv and self.esec is None else []   # il ticker TV della watchlist è del listino richiesto
+            cand = list(dict.fromkeys(mio_tv + D.simbolo_tv_default(self.sym)))
             tk, vals, err = D.screener_tv(cand)
             righe = []
             for col_tv, col in D.TV_COLONNE.items():
@@ -693,14 +878,14 @@ class Analisi:
         tab = []
         for nome, tv, mio in righe:
             if _nan(tv) or mio is None:
-                tab.append([nome, fn(tv, 4), fn(mio, 4), "n.d.", "n.d."])
+                tab.append([nome, fn(tv, 4), fn(mio, 4), "n.d."])
             else:
-                tab.append([nome, fn(tv, 4), fn(mio, 4), fn(mio - tv, 4, True), fn(self._scarto_pct(tv, mio), 3, True)])
+                tab.append([nome, fn(tv, 4), fn(mio, 4), fn(self._scarto_pct(tv, mio), 3, True)])
         out.append(f"Ticker {tk}; TradingView = sua barra giornaliera corrente, Calcolato = ultima barra Yahoo del {fdata(self.oggi)}. "
                    "A mercato aperto gli scarti riflettono soprattutto la differenza dell'ultimo prezzo.\n")
         if self.avvisi_tv():
             out.append("**ATTENZIONE**: scarti non spiegabili dall'ultimo prezzo, vedi gli avvisi in testa al file.\n")
-        out.append(tabella(["Indicatore", "TradingView", "Calcolato", "Scarto", "Scarto %"], tab))
+        out.append(tabella(["Indicatore", "TradingView", "Calcolato", "Scarto %"], tab))
         return "\n".join(out)
 
     def riga_tv_sintesi(self) -> str:
@@ -737,14 +922,21 @@ class Analisi:
         else:
             out.append("\nSettimanale: " + nd(self.s.errori.get("settimanale", "serie vuota")))
         m = self.s.m30
-        if len(m):
-            giorni = sorted(set(m.index.date))[-5:]
-            m5 = m[[d in giorni for d in m.index.date]]
-            out.append(f"\n30 minuti, ultime {len(giorni)} sedute (un blocco per seduta; ora = inizio barra, Europe/Rome):\n")
-            for g in giorni:
-                out.append(f"{g:%Y-%m-%d}:\n" + csv(m5[m5.index.date == g], lambda t: t.strftime("%H:%M"), "ora"))
-        else:
-            out.append("\n30 minuti: " + nd(self.s.errori.get("30m", "serie vuota")))
+        sedute = [x.date() for x in self.df.index[-5:]]
+        oggi_d = D.ora_roma().date()
+        if len(m) and self.manca_oggi and (m.index.date == oggi_d).any():
+            sedute = sedute[1:] + [oggi_d]
+        out.append(f"\n30 minuti, ultime {len(sedute)} sedute (un blocco per seduta; ora = inizio barra, Europe/Rome):\n")
+        if not len(m):
+            out.append(nd(self.s.errori.get("30m", "Yahoo non ha restituito barre a 30 minuti")))
+        for g in sedute:
+            b30 = m[m.index.date == g] if len(m) else m
+            if len(b30):
+                out.append(f"{g:%Y-%m-%d}" + (" (in corso)" if g == oggi_d and self.aperto else "") + ":\n"
+                           + csv(b30, lambda t: t.strftime("%H:%M"), "ora"))
+            elif len(m):
+                out.append(f"{g:%Y-%m-%d}: nessuna barra a 30 minuti restituita da Yahoo per questa seduta"
+                           f" (ultima barra disponibile: {D.fmt_ora(m.index[-1])}).")
         return "\n".join(out)
 
 
@@ -756,24 +948,19 @@ def intestazione_definizioni(cfg: dict) -> str:
     return "\n".join([
         "## Definizioni e parametri",
         "",
-        "Formule identiche alle funzioni Pine di TradingView (ta.sma, ta.ema, ta.rma, ta.rsi, ta.atr, indicatori integrati DMI, MACD, Stochastic, Bollinger Bands).",
+        "Formule delle funzioni Pine di TradingView (ta.sma/ema/rma/rsi/atr; DMI, MACD, Stochastic, Bollinger integrati). Dati Yahoo Finance (yfinance, `auto_adjust=False`: prezzi NON aggiustati per i dividendi; split già applicati da Yahoo). Orari Europe/Rome; decimale = punto; n.d. = non disponibile (motivo tra parentesi). Distanza di un livello = (livello/prezzo − 1) in % e (livello − prezzo)/ATR14.",
         "",
-        "- **Dati**: Yahoo Finance via yfinance, `auto_adjust=False` (prezzi NON aggiustati per dividendi; gli split sono già applicati da Yahoo a tutta la serie). Orari Europe/Rome. Decimale = punto. n.d. = non disponibile (motivo tra parentesi). Distanze = (livello/prezzo − 1) in % e (livello − prezzo)/ATR14 in multipli di ATR.",
-        "- **SMA n**: media aritmetica delle ultime n chiusure. **EMA n**: α = 2/(n+1), primo valore = SMA n.",
-        "- **RMA n (Wilder)**: α = 1/n, primo valore = SMA n.",
-        f"- **KAMA(n, veloce, lenta)**: ER = |C − C[n]| / Σn|C − C[1]|; SC = (ER·(2/(veloce+1) − 2/(lenta+1)) + 2/(lenta+1))²; KAMA = KAMA[1] + SC·(C − KAMA[1]); primo valore = C alla barra n. Usate: {', '.join(f'KAMA({a},{b},{c})' for a, b, c in kp)} su chiusura.",
-        "- **RSI 14**: 100 − 100/(1 + RMA14(guadagni)/RMA14(perdite)).",
-        "- **Stocastico 14-3-3**: %K = SMA3(100·(C − min14 L)/(max14 H − min14 L)); %D = SMA3(%K).",
-        "- **MACD 12-26-9**: EMA12 − EMA26; segnale = EMA9 del MACD; istogramma = MACD − segnale.",
-        "- **DMI/ADX 14-14**: +DM/−DM di Wilder; +DI = 100·RMA14(+DM)/RMA14(TR); ADX = 100·RMA14(|+DI − −DI|/(+DI + −DI)).",
-        "- **ATR 14**: RMA14 del True Range = max(H − L, |H − C[1]|, |L − C[1]|). ATR% = ATR/C·100.",
-        "- **Bollinger 20-2**: base SMA20 ± 2·deviazione standard di popolazione a 20; %B = (C − inf)/(sup − inf); larghezza % = (sup − inf)/base·100.",
-        "- **Volume relativo**: volume della seduta / media dei volumi delle 20 sedute precedenti.",
-        f"- **ZigZag**: un massimo (minimo) diventa swing quando il prezzo si allontana in senso opposto di almeno {zz} × ATR14 (ATR della barra dello swing). L'ultimo estremo non ancora confermato è \"provvisorio\". Swing maggiori (Fibonacci): soglia {max(3.0, 2 * zz)} × ATR14; Fibonacci sull'ultimo swing maggiore completato e su quello in corso.",
-        "- **Livelli**: gruppi di swing confermati degli ultimi 3 anni entro ±0.5 ATR14; numeri tondi con passo = metà della potenza di 10 inferiore al prezzo.",
-        "- **Gap**: minimo della seduta > massimo della precedente (o massimo < minimo); chiuso quando una seduta successiva tocca il bordo della seduta precedente il gap.",
-        "- **Doppio massimo/minimo candidato**: tre swing consecutivi H-L-H (L-H-L) con i due estremi entro 1 ATR14. **Base/rettangolo**: ≥15 sedute con (max H − min L) ≤ 4 ATR14; tocco = seduta entro 0.25 ATR dal bordo, sedute consecutive contano una volta; obiettivo di misura = bordo rotto ± altezza.",
-        "- **Statistiche**: al massimo 10 anni di sedute; percentili lineari; n = numero di osservazioni.",
+        "- **SMA n** media delle chiusure; **EMA n** α=2/(n+1); **RMA n** (Wilder) α=1/n; EMA e RMA partono dalla SMA n.",
+        f"- **KAMA(n,veloce,lenta)**: ER = |C−C[n]| / Σn|C−C[1]|; SC = (ER·(2/(v+1) − 2/(l+1)) + 2/(l+1))²; KAMA = KAMA[1] + SC·(C − KAMA[1]); inizio = C alla barra n. Usate {', '.join(f'KAMA({a},{b},{c})' for a, b, c in kp)} su chiusura.",
+        "- **RSI14** = 100 − 100/(1 + RMA14(rialzi)/RMA14(ribassi)). **Stocastico 14-3-3**: %K = SMA3 di 100·(C − min14 L)/(max14 H − min14 L), %D = SMA3(%K). **MACD 12-26-9**: EMA12 − EMA26, segnale EMA9, istogramma = differenza.",
+        "- **DMI/ADX 14-14**: +DI = 100·RMA14(+DM)/RMA14(TR), idem −DI; ADX = 100·RMA14(|+DI − −DI|/(+DI + −DI)). **ATR14** = RMA14(max(H−L, |H−C[1]|, |L−C[1]|)); ATR% = ATR/C·100.",
+        "- **Bollinger 20-2**: SMA20 ± 2·dev. std. di popolazione; %B = (C − inf)/(sup − inf); larghezza % = (sup − inf)/base·100. **Volume relativo** = volume / media dei 20 volumi precedenti.",
+        f"- **ZigZag**: un estremo diventa swing quando il prezzo torna indietro di almeno {zz}×ATR14 (della barra dello swing); l'ultimo, non confermato, è \"provv.\". Swing maggiori (Fibonacci): {max(3.0, 2 * zz)}×ATR14, sull'ultimo completato e su quello in corso. HH/LH/HL/LL = massimo crescente/decrescente, minimo crescente/decrescente.",
+        "- **Livelli**: gruppi di swing confermati degli ultimi 3 anni entro ±0.5 ATR14; numeri tondi a passo metà della potenza di 10 inferiore al prezzo. **Gap**: minimo > massimo precedente (o viceversa); chiuso quando una seduta successiva tocca il bordo della seduta prima del gap.",
+        "- **Doppio massimo/minimo candidato**: swing consecutivi H-L-H (L-H-L) con estremi entro 1 ATR14. **Base/rettangolo**: ≥15 sedute con (max H − min L) ≤ 4 ATR14; tocco = entro 0.25 ATR dal bordo (sedute consecutive = 1); obiettivo = bordo rotto ± altezza.",
+        "- **Statistiche**: max 10 anni; percentili lineari; n = osservazioni; ogni statistica condizionata è affiancata dal tasso su tutti i giorni; IC95 = intervallo di Wilson al 95%.",
+        "- **Qualità del dato**: barra incoerente = O o C fuori da L–H; stampa anomala = ombra > 3 ATR14 (seduta precedente) con volume < 0.5× media 20; per un listino di esecuzione, massimi/minimi oltre il range del mercato principale di più di 0.5 ATR14. Barre incoerenti e stampe anomale sono escluse da swing, livelli, estremi e rettangoli; gli indicatori usano la serie com'è, come TradingView.",
+        "- **Mercato principale**: per i titoli quotati su più mercati l'analisi è sul principale; il listino degli ordini è tra gli strumenti collegati, con lo scarto di prezzo.",
     ])
 
 
@@ -794,9 +981,7 @@ def documento_titolo(st: Strumento, cfg: dict) -> str:
     if not a.ok:
         return (_testa(f"Analisi tecnica — {st.simbolo}", cfg, [], "Titolo") +
                 f"\n\nDati non disponibili per {st.simbolo}: {a.s.errori}\n")
-    avvisi = []
-    if a.incompleta:
-        avvisi.append("**ATTENZIONE: mercato aperto. L'ultima barra giornaliera (e settimanale) è incompleta; volume parziale.**")
+    avvisi = [f"**ATTENZIONE**: {x}" for x in a.avvisi_testa()]
     try:
         avvisi += [f"**ATTENZIONE qualità del dato**: {x}" for x in a.avvisi_tv()]
     except Exception:                            # noqa: BLE001 - la sezione 14 riporterà l'errore
@@ -813,7 +998,9 @@ def documento_titolo(st: Strumento, cfg: dict) -> str:
         (a.sez_collegati, "Strumenti collegati"), (a.sez_eventi, "Eventi"),
         (lambda n: a.sez_posizione(n, totali), "Posizione"), (a.sez_tv, "Controllo incrociato TradingView"), (a.sez_grezzi, "Dati grezzi"),
     ]
-    sez = [_testa(f"Analisi tecnica — {st.simbolo} ({st.nome or a.s.meta.get('longName') or ''})", cfg, avvisi, "Titolo"),
+    titolo = f"Analisi tecnica — {a.sym} ({st.nome or a.s.meta.get('longName') or ''})" + (
+        f" · ordini su {st.simbolo}" if a.esec is not None else "")
+    sez = [_testa(titolo, cfg, avvisi, "Titolo"),
            intestazione_definizioni(cfg)]
     sez += [_protetta(fn_, n, tit) for n, (fn_, tit) in enumerate(sezioni, start=1)]
     doc = "\n\n".join(sez) + "\n"
@@ -839,21 +1026,24 @@ def _blocco_sintesi_protetto(a: "Analisi", totali: dict, k: int) -> str:
 
 def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
     st = a.st
-    r = [f"## {k}. {st.nome or a.s.meta.get('longName') or st.simbolo} — {st.simbolo}"
+    r = [f"## {k}. {st.nome or a.s.meta.get('longName') or st.simbolo} — {a.sym}"
+         + (f" (ordini su {st.simbolo})" if a.esec is not None else "")
          + (" (in portafoglio)" if st.posizione.get("quantita") else " (watchlist)")]
     if not a.ok:
         r.append(nd(str(a.s.errori)))
         return "\n\n".join(r)
     prev = float(a.c.iloc[-2])
     tipo = st.tipo or nd("tipo non indicato")
-    r.append(f"ISIN {st.isin or 'n.d.'} · {st.mercato or a.s.meta.get('fullExchangeName', '')} · {a.valuta} · {tipo} · zainetto: "
+    r += [f"**ATTENZIONE**: {x}" for x in a.avvisi_testa()]
+    mercato = a.s.meta.get("fullExchangeName") or Q.nome_mercato(a.sym) or (st.mercato if a.esec is None else "") or "mercato n.d."
+    r.append(f"ISIN {st.isin or 'n.d.'} · {mercato} · {a.valuta or 'valuta n.d.'} · {tipo} · zainetto: "
              f"{TIPI_ZAINETTO.get(st.tipo, 'n.d.')} · ultima seduta {fdata(a.oggi)}{' (INCOMPLETA, mercato aperto)' if a.incompleta else ''} · "
              f"fonte {a.s.fonte}, {D.fmt_ora(a.s.scaricato_alle)}"
              + (f" · errori fonte: {a.s.errori}" if a.s.errori else ""))
     r.append(a.riga_tv_sintesi())
     ora = D.ultimo_orario(a.s)
     rr = a.df.iloc[-1]
-    r.append(f"**Prezzo** {a.p(a.ultimo)} (orario {D.fmt_ora(ora) if ora is not None else 'n.d.'}); O/H/L {a.p(rr['Open'])}/{a.p(rr['High'])}/{a.p(rr['Low'])}; "
+    r.append(f"**Prezzo** {a.p(a.ultimo)} (chiusura/ultimo della seduta {fdata(a.oggi)}; orario Yahoo {D.fmt_ora(ora) if ora is not None else 'n.d.'}); O/H/L {a.p(rr['Open'])}/{a.p(rr['High'])}/{a.p(rr['Low'])}; "
              f"prec. {a.p(prev)}; var {(a.ultimo / prev - 1) * 100:+.2f}%; volume {fvol(rr['Volume'])}, rel. {fn(a.vol_rel())}.")
     # indicatori compatti
     medie = ["SMA20", "SMA50", "SMA100", "SMA200", "EMA20", "EMA50"] + [f"KAMA({x},{y},{z})" for x, y, z in a.kama_p]
@@ -876,7 +1066,7 @@ def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
              + "; ".join(f"{fdata(p.data)} {'H' if p.tipo == 'H' else 'L'} {a.p(p.prezzo)}{' ' + p.etichetta if p.etichetta else ''}{' (provv.)' if not p.confermato else ''}"
                          for p in ult)
              + f". Sequenza massimi {'→'.join(p.etichetta for p in hs) or 'n.d.'}, minimi {'→'.join(p.etichetta for p in ls) or 'n.d.'}.")
-    est = T.estremi_periodo(a.df, a.oggi)
+    est = T.estremi_periodo(a.df, a.oggi, a.escludi)
     r.append("**Estremi**: " + "; ".join(f"{k} {a.p(e['max'])} ({fdata(e['data_max'])}) / {a.p(e['min'])} ({fdata(e['data_min'])})"
                                        for k, e in est.items() if e))
     lv = a.livelli(4)
@@ -894,6 +1084,8 @@ def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
                 f"ribasso {'/'.join(fn(esc['giu_pct'][i]) for i in (1, 3, 5))}% (n={esc['n']})" if esc else "") + ".")
     fr = a.sez_forza_relativa(0).split("\n\n")
     r.append("**Forza relativa**: " + fr[0].replace("## 0. ", "") + "\n\n" + fr[-1] if len(fr) > 1 else "")
+    if a.esec is not None:
+        r.append(a.blocco_esecuzione(sintesi=True))
     if st.collegati:
         r.append(a.sez_collegati(0, righe_max=2).replace("## 0. Strumenti collegati\n", "**Strumenti collegati**\n").strip())
     ev = a.sez_eventi(0).split("\n")[1:]
@@ -918,7 +1110,8 @@ def documento_portafoglio(strumenti: list[Strumento], cfg: dict, limite: int = 6
     totali = {"investito": investito, "conto": investito + float(liq) if liq not in (None, "") else None}
     avvisi = []
     if any(a.ok and a.incompleta for a in analisi):
-        avvisi.append("**ATTENZIONE: per gli strumenti segnati \"INCOMPLETA\" il mercato è aperto e l'ultima barra è incompleta.**")
+        avvisi.append("**ATTENZIONE: per gli strumenti segnati \"INCOMPLETA\" il mercato è aperto e l'ultima barra è incompleta.** "
+                      "Gli avvisi specifici sono all'inizio di ogni blocco.")
     pos = [a for a in analisi if a.st.posizione.get("quantita")]
     righe = []
     for a in pos:

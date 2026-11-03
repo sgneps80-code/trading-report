@@ -14,6 +14,8 @@ from analisi import report as R
 
 
 def _serie_finta(simbolo, intraday=True, eventi=True):
+    if simbolo == "1SAN.MI":                       # listino secondario: stesso titolo di SAN.PA
+        return _listino_secondario()
     rng = np.random.default_rng(zlib.crc32(simbolo.encode()))
     idx = pd.bdate_range("2014-01-02", "2026-10-30")
     c = 50 * np.exp(np.cumsum(rng.normal(0.0002, 0.015, len(idx))))
@@ -36,6 +38,21 @@ def _serie_finta(simbolo, intraday=True, eventi=True):
     s.meta = {"currency": "EUR", "longName": f"Finta {simbolo}", "regularMarketTime": 1761840000}
     s.calendario = {"Earnings Date": [pd.Timestamp("2027-01-30").date()]}
     s.date_conti = [idx[-60].date()]
+    return s
+
+
+def _listino_secondario():
+    """1SAN.MI: prezzi di SAN.PA +0.2%, 10 barre incoerenti, una stampa fuori range, metadati assenti."""
+    p = _serie_finta("SAN.PA")
+    df = p.giornaliero.copy()
+    for k in ("Open", "High", "Low", "Close"):
+        df[k] = (df[k] * 1.002).round(2)
+    df["Volume"] = (df["Volume"] / 100).round()
+    for i in range(1, 11):                          # chiusura sopra il massimo
+        df.iloc[-i * 7, df.columns.get_loc("Close")] = df["High"].iloc[-i * 7] + 0.5
+    df.iloc[-3, df.columns.get_loc("High")] = df["High"].iloc[-3] * 1.15
+    s = D.Serie(simbolo="1SAN.MI", giornaliero=df, scaricato_alle=D.ora_roma(), fonte="SINTETICO")
+    s.errori["meta"] = "KeyError: 'currentTradingPeriod'"
     return s
 
 
@@ -63,13 +80,51 @@ def test_titolo():
     for k in range(1, 16):
         assert f"\n## {k}. " in md, f"manca la sezione {k}"
     assert "```csv" in md and "FILE DI PROVA" in md
+    assert "errore di calcolo" not in md, md[md.find("errore di calcolo") - 300:][:600]
     assert len(md) < 43000, len(md)      # limite indicativo ~40000 (dati sintetici con molti gap)
+
+
+def test_mercato_principale_e_qualita():
+    st = R.Strumento.da_dict({"simbolo": "1SAN.MI", "isin": "FR0000120578", "valuta": "EUR", "tipo": "azione",
+                              "posizione": {"quantita": 10, "carico": 40, "stop": 30}})
+    md = R.documento_titolo(st, CFG)
+    assert "errore di calcolo" not in md
+    assert "Analisi tecnica — SAN.PA" in md and "ordini su 1SAN.MI" in md
+    assert "Listino di esecuzione 1SAN.MI" in md
+    assert "barre incoerenti (O o C fuori da L–H) 10" in md
+    assert "oltre il range del principale di più di 0.5 ATR 1" in md
+    assert "ultima chiusura del listino di esecuzione 1SAN.MI" in md
+    sts = [R.Strumento.da_dict({"simbolo": "1SAN.MI", "isin": "FR0000120578", "valuta": "EUR"})]
+    mp = R.documento_portafoglio(sts, CFG)
+    assert "errore di calcolo" not in mp and "SAN.PA (ordini su 1SAN.MI)" in mp
+
+
+def test_principale_da_isin_e_wilson():
+    from analisi.qualita import principale_da_isin, wilson
+    assert principale_da_isin("1SAN.MI", "FR0000120578") == "SAN.PA"
+    assert principale_da_isin("1BAYN.MI", "DE000BAY0017") == "BAYN.DE"
+    assert principale_da_isin("1AAPL.MI", "US0378331005") == "AAPL"
+    assert principale_da_isin("ISP.MI", "IT0000072618") is None
+    lo, hi = wilson(5, 10)
+    assert abs(lo - 23.659) < 0.01 and abs(hi - 76.341) < 0.01
+
+
+def test_incoerenti_e_ombre():
+    from analisi.qualita import incoerenti, ombre_anomale
+    df = pd.DataFrame({"Open": [10, 10, 10.0], "High": [11, 11, 11.0], "Low": [9, 9, 9.0], "Close": [10.5, 11.2, 9.5],
+                       "Volume": [100, 100, 10.0]})
+    assert incoerenti(df).tolist() == [False, True, False]
+    atr = pd.Series([0.5, 0.5, 0.5]); v20 = pd.Series([100, 100, 100.0])
+    df2 = df.copy(); df2.loc[2, "High"] = 13.0          # ombra superiore 2.5 > 3*0.5, volume 10 < 50
+    df2.loc[1, "Close"] = 10.5
+    assert ombre_anomale(df2, atr, v20).tolist() == [False, False, True]
 
 
 def test_portafoglio():
     sts = [R.Strumento.da_dict(x) for x in CFG["strumenti"]]
     md = R.documento_portafoglio(sts, CFG)
     assert "Riepilogo conto" in md and "```csv" not in md
+    assert "errore di calcolo" not in md, md[md.find("errore di calcolo") - 300:][:600]
     assert len(md) < 60000, len(md)
 
 

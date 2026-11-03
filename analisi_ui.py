@@ -43,6 +43,7 @@ _HTML = r"""
     <table id="at-tab" style="width:100%;border-collapse:collapse;font-size:12px;min-width:1200px">
       <thead><tr style="background:#1e3a5f;color:white">
         <th style="padding:6px">Simbolo</th><th>Nome</th><th>ISIN</th><th>Mercato</th><th>Valuta</th><th>Tipo</th>
+        <th title="Mercato principale, se diverso dal listino degli ordini (es. SAN.PA per 1SAN.MI). Vuoto = automatico per i listini 1XXX.MI con ISIN">Principale ⓘ</th>
         <th>Benchmark</th><th>Ticker TV</th><th title="es. SNY adr 0.5 EURUSD=X ; GC=F sottostante - EURUSD=X">Collegati ⓘ</th>
         <th>Quantità</th><th>Carico</th><th>Stop</th><th>Target</th><th>Uscita</th><th></th>
       </tr></thead>
@@ -64,6 +65,9 @@ _HTML = r"""
       <ul style="margin:8px 0 0 18px;line-height:1.6">
         <li><b>Tipo</b>: decide la compensabilità con lo zainetto (sì per azioni, ETC, obbligazioni, certificati; no per le plusvalenze degli ETF UCITS).
           Le righe importate dalle posizioni del report arrivano come "azione" o "etf": correggi gli ETC.</li>
+        <li><b>Principale</b>: per i titoli quotati su più mercati, il simbolo del mercato principale (es. <code>SAN.PA</code> per <code>1SAN.MI</code>):
+          l'analisi si fa lì e il listino degli ordini compare come collegato, con lo scarto di prezzo. Vuoto = automatico per i listini
+          <code>1XXX.MI</code> con ISIN (FR → .PA, DE → .DE, US → nessun suffisso…), usato solo se i prezzi coincidono entro il 3%.</li>
         <li><b>Benchmark</b>: vuoto = FTSEMIB.MI per .MI, ^FCHI per .PA, ^GSPC per i titoli USA.</li>
         <li><b>Ticker TV</b>: facoltativo, per il controllo incrociato con lo screener (es. <code>MIL:ISP</code>, <code>EURONEXT:SAN</code>).</li>
         <li><b>Collegati</b>: <code>SIMBOLO tipo rapporto CAMBIO</code>, più voci separate da <code>;</code>.
@@ -84,7 +88,7 @@ _HTML = r"""
 (function () {
   const LS = "at_config_v1";
   try { localStorage.removeItem("tr_akey"); } catch (e) {}   // chiave della versione precedente, non più usata
-  const CAMPI = ["simbolo","nome","isin","mercato","valuta","tipo","benchmark","tv","collegati","quantita","carico","stop","target","uscita"];
+  const CAMPI = ["simbolo","nome","isin","mercato","valuta","tipo","principale","benchmark","tv","collegati","quantita","carico","stop","target","uscita"];
   const TIPI = ["","azione","etf","etc","obbligazione","certificato"];
 
   function leggi() {
@@ -111,7 +115,7 @@ _HTML = r"""
   // ─── tabella ───────────────────────────────────────────────────────────────
   function riga(s) {
     const p = s.posizione || {};
-    const v = {simbolo: s.simbolo, nome: s.nome, isin: s.isin, mercato: s.mercato, valuta: s.valuta, tipo: s.tipo,
+    const v = {simbolo: s.simbolo, nome: s.nome, isin: s.isin, mercato: s.mercato, valuta: s.valuta, tipo: s.tipo, principale: s.principale,
                benchmark: s.benchmark, tv: s.tv, collegati: collegatiInTesto(s.collegati),
                quantita: p.quantita, carico: p.carico, stop: p.stop, target: p.target, uscita: p.uscita};
     const tr = document.createElement("tr");
@@ -138,7 +142,8 @@ _HTML = r"""
       if (!g("simbolo")) return;
       const n = c => g(c) === "" ? null : parseFloat(g(c).replace(",", "."));
       const s = {simbolo: g("simbolo").toUpperCase(), nome: g("nome"), isin: g("isin").toUpperCase(), mercato: g("mercato"),
-                 valuta: g("valuta").toUpperCase(), tipo: g("tipo"), benchmark: g("benchmark").toUpperCase(), tv: g("tv").toUpperCase(),
+                 valuta: g("valuta").toUpperCase(), tipo: g("tipo"), principale: g("principale").toUpperCase(),
+                 benchmark: g("benchmark").toUpperCase(), tv: g("tv").toUpperCase(),
                  collegati: collegatiDaTesto(g("collegati"))};
       const pos = {quantita: n("quantita"), carico: n("carico"), stop: n("stop"), target: n("target"), uscita: g("uscita") || null};
       if (Object.values(pos).some(x => x !== null)) s.posizione = pos;
