@@ -38,10 +38,9 @@ on:
 permissions:
   contents: write
 
-# Una pubblicazione alla volta sul branch analisi-output
-concurrency:
-  group: analisi-output
-  cancel-in-progress: false
+# Nessun gruppo di concorrenza: GitHub ne terrebbe in coda una sola e
+# annullerebbe le richieste intermedie. Le richieste girano in parallelo e la
+# pubblicazione si protegge da sola con --force-with-lease (vedi sotto).
 
 jobs:
   genera:
@@ -80,28 +79,40 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # Branch "usa e getta": un solo commit (orfano) con i file delle
         # ultime 24 ore, riscritto a ogni richiesta. Nessuna storia accumulata.
+        # Se nel frattempo un'altra richiesta ha pubblicato, il push con
+        # --force-with-lease viene rifiutato e si riparte dallo stato nuovo.
         run: |
-          set -euo pipefail
+          set -uo pipefail
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          mkdir pub && cd pub
-          git init -q
-          git checkout -q --orphan analisi-output
-          if git fetch -q --depth 1 "$remote" analisi-output 2>/dev/null; then
-            git checkout -q FETCH_HEAD -- . || true
-          fi
-          adesso=$(date +%s)
-          touch indice.txt
-          awk -v t="$adesso" '$1 > t - 86400' indice.txt > indice.nuovo || true
-          for f in *; do
-            case "$f" in indice.txt|indice.nuovo) continue;; esac
-            id="${f%.*}"
-            grep -q " ${id}\$" indice.nuovo || rm -f "$f"
+          for tentativo in 1 2 3 4 5 6; do
+            rm -rf pub && mkdir pub && cd pub
+            git init -q && git checkout -q --orphan analisi-output
+            base=""
+            if git fetch -q --depth 1 "$remote" analisi-output 2>/dev/null; then
+              base=$(git rev-parse FETCH_HEAD)
+              git checkout -q FETCH_HEAD -- . || true
+            fi
+            adesso=$(date +%s)
+            touch indice.txt
+            awk -v t="$adesso" '$1 > t - 86400' indice.txt > indice.nuovo || true
+            for f in *; do
+              case "$f" in indice.txt|indice.nuovo) continue;; esac
+              id="${f%.*}"
+              grep -q " ${id}\$" indice.nuovo || rm -f "$f"
+            done
+            for f in ../out_analisi/*; do
+              cp "$f" .
+              b=$(basename "$f"); echo "$adesso ${b%.*}" >> indice.nuovo
+            done
+            sort -u indice.nuovo > indice.txt && rm indice.nuovo
+            git add -A
+            git -c user.name="trading-bot" -c user.email="bot@trading-report" commit -qm "analisi $(date -u +%FT%TZ)"
+            if git push -q --force-with-lease="refs/heads/analisi-output:${base}" "$remote" HEAD:refs/heads/analisi-output; then
+              echo "Pubblicato al tentativo $tentativo"
+              exit 0
+            fi
+            cd ..
+            sleep $((tentativo * 2 + RANDOM % 3))
           done
-          for f in ../out_analisi/*; do
-            cp "$f" .
-            b=$(basename "$f"); echo "$adesso ${b%.*}" >> indice.nuovo
-          done
-          sort -u indice.nuovo > indice.txt && rm indice.nuovo
-          git add -A
-          git -c user.name="trading-bot" -c user.email="bot@trading-report" commit -qm "analisi $(date -u +%FT%TZ)"
-          git push -qf "$remote" HEAD:analisi-output
+          echo "Pubblicazione non riuscita dopo 6 tentativi"
+          exit 1
