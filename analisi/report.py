@@ -173,7 +173,9 @@ class Analisi:
         self.zz_mult = float(cfg.get("zigzag_atr") or 1.5)
         self.kama_p = [tuple(int(v) for v in k) for k in (cfg.get("kama") or KAMA_DEFAULT)]
         self.s = arch.get(st.simbolo, intraday=intraday, eventi=True)
-        self.ok = self.s.ok
+        self.ok = self.s.ok and len(self.s.giornaliero) >= 30
+        if self.s.ok and not self.ok:
+            self.s.errori["giornaliero"] = f"storico insufficiente: {len(self.s.giornaliero)} sedute (minimo 30)"
         if not self.ok:
             return
         self.df = self.s.giornaliero
@@ -728,17 +730,35 @@ def documento_titolo(st: Strumento, cfg: dict) -> str:
         x = a.posizione_numeri()
         liq = cfg.get("liquidita")
         totali = {"investito": x["cv_eur"], "conto": (x["cv_eur"] + float(liq)) if liq not in (None, "") and x["cv_eur"] else None}
-    sez = [
-        _testa(f"Analisi tecnica — {st.simbolo} ({st.nome or a.s.meta.get('longName') or ''})", cfg, avvisi, "Titolo"),
-        intestazione_definizioni(cfg),
-        a.sez_anagrafica(1), a.sez_prezzo(2), a.sez_indicatori(3), a.sez_struttura(4), a.sez_livelli(5),
-        a.sez_gap(6), a.sez_candele(7), a.sez_figure(8), a.sez_statistiche(9), a.sez_forza_relativa(10),
-        a.sez_collegati(11), a.sez_eventi(12), a.sez_posizione(13, totali), a.sez_tv(14), a.sez_grezzi(15),
+    sezioni = [
+        (a.sez_anagrafica, "Anagrafica e qualità del dato"), (a.sez_prezzo, "Prezzo"), (a.sez_indicatori, "Indicatori"),
+        (a.sez_struttura, "Struttura"), (a.sez_livelli, "Livelli"), (a.sez_gap, "Gap"), (a.sez_candele, "Ultime 10 candele"),
+        (a.sez_figure, "Figure candidate"), (a.sez_statistiche, "Statistiche storiche"), (a.sez_forza_relativa, "Forza relativa"),
+        (a.sez_collegati, "Strumenti collegati"), (a.sez_eventi, "Eventi"),
+        (lambda n: a.sez_posizione(n, totali), "Posizione"), (a.sez_tv, "Controllo incrociato TradingView"), (a.sez_grezzi, "Dati grezzi"),
     ]
+    sez = [_testa(f"Analisi tecnica — {st.simbolo} ({st.nome or a.s.meta.get('longName') or ''})", cfg, avvisi, "Titolo"),
+           intestazione_definizioni(cfg)]
+    sez += [_protetta(fn_, n, tit) for n, (fn_, tit) in enumerate(sezioni, start=1)]
     doc = "\n\n".join(sez) + "\n"
     if len(doc) > 42000:
         doc += f"\n> Nota: file di {len(doc)} caratteri, oltre il limite indicativo di 40000.\n"
     return doc
+
+
+def _protetta(fn_, n: int, titolo: str) -> str:
+    """Una sezione che fallisce diventa "n.d." con il motivo, senza bloccare il file."""
+    try:
+        return fn_(n)
+    except Exception as e:                      # noqa: BLE001 - qualunque errore va riportato, non nascosto
+        return f"## {n}. {titolo}\n\n{nd(f'errore di calcolo: {type(e).__name__}: {str(e)[:200]}')}"
+
+
+def _blocco_sintesi_protetto(a: "Analisi", totali: dict, k: int) -> str:
+    try:
+        return _blocco_sintesi(a, totali, k)
+    except Exception as e:                      # noqa: BLE001
+        return f"## {k}. {a.st.simbolo}\n\n{nd(f'errore di calcolo: {type(e).__name__}: {str(e)[:200]}')}"
 
 
 def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
@@ -841,7 +861,7 @@ def documento_portafoglio(strumenti: list[Strumento], cfg: dict, limite: int = 6
             + (f" Controvalore in EUR non calcolabile per: {', '.join(mancanti)}." if mancanti else ""), "",
             tabella(["Simbolo", "Quantità", "Carico", "Prezzo", "Controvalore EUR", "Peso investito", "Peso conto"], righe) if righe else "Nessuna posizione."]
     testa = [_testa("Analisi tecnica — PORTAFOGLIO", cfg, avvisi, "Portafoglio"), intestazione_definizioni(cfg), "\n".join(riep)]
-    blocchi = [_blocco_sintesi(a, totali, k + 1) for k, a in enumerate(analisi)]
+    blocchi = [_blocco_sintesi_protetto(a, totali, k + 1) for k, a in enumerate(analisi)]
     doc = "\n\n".join(testa + blocchi) + "\n"
     if len(doc) > limite:
         doc += (f"\n> Nota: il file supera il limite indicativo di {limite} caratteri ({len(doc)}). "

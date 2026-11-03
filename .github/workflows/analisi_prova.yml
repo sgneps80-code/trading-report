@@ -28,12 +28,15 @@ jobs:
       - name: File di prova
         run: |
           mkdir -p out
-          python genera_analisi.py --modo titolo --simbolo SAN.PA --config tests/config_prova.json --out out
-          python genera_analisi.py --modo portafoglio --config tests/config_prova.json --out out
-          python genera_analisi.py --modo titolo --simbolo PHAU.MI --config tests/config_prova.json --out out
+          for args in "--modo titolo --simbolo SAN.PA" "--modo portafoglio" "--modo titolo --simbolo PHAU.MI" "--modo titolo --simbolo GBSE.MI"; do
+            python genera_analisi.py $args --config tests/config_prova.json --out out 2>> out/errori.txt || echo "FALLITO: $args" >> out/errori.txt
+          done
+          grep -v "Pandas4Warning\|whatsnew\|sort_index" out/errori.txt > out/errori_filtrati.txt || true
+          rm out/errori.txt
           cp ~/Downloads/verifica_fonti_*.md out/ ; cp esito_test.txt out/
           ls -la out
       - name: Pubblica risultati sul branch di collaudo
+        if: always()
         run: |
           cd out
           git init -q && git checkout -q --orphan claude/analisi-prova-output
