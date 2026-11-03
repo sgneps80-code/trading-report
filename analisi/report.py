@@ -698,8 +698,8 @@ class Analisi:
                 tab.append([nome, fn(tv, 4), fn(mio, 4), fn(mio - tv, 4, True), fn(self._scarto_pct(tv, mio), 3, True)])
         out.append(f"Ticker {tk}; TradingView = sua barra giornaliera corrente, Calcolato = ultima barra Yahoo del {fdata(self.oggi)}. "
                    "A mercato aperto gli scarti riflettono soprattutto la differenza dell'ultimo prezzo.\n")
-        for a in self.avvisi_tv():
-            out.append(f"**ATTENZIONE**: {a}\n")
+        if self.avvisi_tv():
+            out.append("**ATTENZIONE**: scarti non spiegabili dall'ultimo prezzo, vedi gli avvisi in testa al file.\n")
         out.append(tabella(["Indicatore", "TradingView", "Calcolato", "Scarto", "Scarto %"], tab))
         return "\n".join(out)
 

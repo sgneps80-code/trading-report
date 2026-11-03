@@ -211,6 +211,15 @@ Se il browser chiede ogni volta dove salvare:
   direttamente: la libreria per default esclude ADR, ETF/ETC, cambi e indici) e riporta gli scarti.
 - Test: `python -m pytest tests -q` (indicatori su valori calcolati a mano e
   contro TA-Lib, generazione completa su dati sintetici, cifratura).
+- **Qualità del dato per ETF/ETC di Borsa Italiana** (verificato il 2026-11-03):
+  per le azioni (ISP, ENI, REY, SOM, OMER, SAN, SNY) i valori calcolati da Yahoo
+  coincidono con lo screener TradingView alla 4ª cifra; per alcuni ETP no.
+  `XUSE.MI` su Yahoo è quotato in EUR mentre `EURONEXT:XUSE` su TradingView
+  vale 1.118 volte tanto (= EURUSD, probabilmente la linea in USD);
+  `GBSE.MI` ha la stessa chiusura ma massimi/minimi più ampi (ATR +20%).
+  Il file lo segnala da solo in testa ("ATTENZIONE qualità del dato") e in
+  ogni blocco del Portafoglio, quindi l'analista sa quando i livelli in ATR
+  possono non coincidere con i tuoi grafici.
 - `verifica_fonti.py`: diagnostica di Yahoo, TradingView e CORS sui simboli principali.
 - KAMA: KAMA(10,2,30) e KAMA(50,2,30) sulla chiusura (formula nel file).
   Se su TradingView usi parametri o uno script diversi, cambiali in
