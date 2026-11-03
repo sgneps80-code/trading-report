@@ -207,7 +207,8 @@ Se il browser chiede ogni volta dove salvare:
   per i dividendi; dividendi e split elencati a parte). 30 minuti: Yahoo dà solo
   gli ultimi 60 giorni. Oro spot (`XAUUSD=X`) non esiste su Yahoo: si usa `GC=F`.
 - Controllo incrociato: la modalità Titolo confronta 18 valori con lo screener
-  TradingView (`tradingview-screener`) e riporta gli scarti.
+  TradingView (stesso endpoint della libreria `tradingview-screener`, chiamato
+  direttamente: la libreria per default esclude ADR, ETF/ETC, cambi e indici) e riporta gli scarti.
 - Test: `python -m pytest tests -q` (indicatori su valori calcolati a mano e
   contro TA-Lib, generazione completa su dati sintetici, cifratura).
 - `verifica_fonti.py`: diagnostica di Yahoo, TradingView e CORS sui simboli principali.

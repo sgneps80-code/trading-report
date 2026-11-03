@@ -23,8 +23,6 @@ jobs:
       - run: pip install -r requirements-analisi.txt pytest TA-Lib
       - name: Test indicatori (valori noti + TA-Lib) e generazione offline
         run: python -m pytest tests -q 2>&1 | tee esito_test.txt
-      - name: Diagnostica TradingView
-        run: python tests/diag_tv.py 2>&1 | tee diag_tv.txt
       - name: Verifica fonti
         run: python verifica_fonti.py | tail -5
       - name: File di prova
@@ -35,7 +33,7 @@ jobs:
           done
           grep -v "Pandas4Warning\|whatsnew\|sort_index" out/errori.txt > out/errori_filtrati.txt || true
           rm out/errori.txt
-          cp ~/Downloads/verifica_fonti_*.md out/ ; cp esito_test.txt diag_tv.txt out/
+          cp ~/Downloads/verifica_fonti_*.md out/ ; cp esito_test.txt out/
           ls -la out
       - name: Pubblica risultati sul branch di collaudo
         if: always()

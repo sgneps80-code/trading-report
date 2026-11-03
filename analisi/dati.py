@@ -1,7 +1,7 @@
 """
 Scaricamento dati: Yahoo Finance via yfinance (storico OHLCV NON aggiustato,
 dividendi, split, calendario eventi) e screener TradingView via
-tradingview-screener (solo per il controllo incrociato degli indicatori).
+screener TradingView (endpoint scanner, solo per il controllo incrociato degli indicatori).
 
 Regola: nessun dato stimato. Se una chiamata fallisce si registra il
 motivo in `errori` e il report scrive "non disponibile (motivo)".
@@ -155,17 +155,21 @@ def ultimo_orario(s: Serie):
 # ─── TradingView ─────────────────────────────────────────────────────────────
 
 def simbolo_tv_default(simbolo_yahoo: str) -> list[str]:
-    """Candidati TradingView per un simbolo Yahoo (il primo che risponde vince).
-    Si puo' sempre forzare il simbolo TV nella watchlist (campo "tv")."""
+    """Candidati TradingView per un simbolo Yahoo, in ordine (vince il primo
+    che lo screener restituisce). Verificati il 2026-11-03: le azioni di
+    Borsa Italiana stanno sotto MIL:, ETF/ETC di Borsa Italiana sotto
+    EURONEXT:. Il simbolo TV si puo' sempre forzare nella watchlist ("tv")."""
     s = simbolo_yahoo.upper()
-    mappa = {"EURUSD=X": ["FX_IDC:EURUSD", "FX:EURUSD"], "GC=F": ["COMEX:GC1!"],
-             "FTSEMIB.MI": ["INDEX:FTSEMIB", "TVC:FTMIB"], "^FCHI": ["EURONEXT:PX1", "TVC:CAC40"],
+    mappa = {"EURUSD=X": ["FX_IDC:EURUSD"], "GC=F": ["COMEX:GC1!"],
+             "FTSEMIB.MI": ["INDEX:FTSEMIB"], "^FCHI": ["EURONEXT:PX1"],
              "^GSPC": ["SP:SPX"], "^STOXX50E": ["TVC:SX5E"]}
     if s in mappa:
         return mappa[s]
+    if s.endswith("=X") and len(s) == 8:
+        return [f"FX_IDC:{s[:6]}"]
     if "." in s:
         base, suf = s.rsplit(".", 1)
-        ex = {"MI": ["MIL"], "PA": ["EURONEXT"], "AS": ["EURONEXT"], "BR": ["EURONEXT"],
+        ex = {"MI": ["MIL", "EURONEXT"], "PA": ["EURONEXT"], "AS": ["EURONEXT"], "BR": ["EURONEXT"],
               "DE": ["XETR"], "F": ["FWB"], "L": ["LSE"], "SW": ["SIX"], "MC": ["BME"]}.get(suf, [])
         return [f"{e}:{base}" for e in ex]
     if s.isalpha():
@@ -183,20 +187,30 @@ TV_COLONNE = {
     "BB.upper": "BBsup", "BB.lower": "BBinf",
 }
 
+TV_URL = "https://scanner.tradingview.com/global/scan"
+TV_HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Content-Type": "application/json",
+              "Origin": "https://www.tradingview.com", "Referer": "https://www.tradingview.com/"}
+
 
 def screener_tv(candidati: list[str]) -> tuple[str | None, dict, str | None]:
-    """Restituisce (ticker TV, {colonna: valore}, errore)."""
+    """Valori dello screener TradingView per il primo candidato che risponde.
+    Chiamata diretta all'endpoint (lo stesso usato da generate_report.py e
+    dalla libreria tradingview-screener): la libreria aggiunge per default
+    filtri "is_primary" e "solo azioni ordinarie" che escludono ADR, ETF/ETC,
+    cambi, future e indici. Restituisce (ticker TV, {colonna: valore}, errore)."""
+    import time
+
+    import requests
     if not candidati:
         return None, {}, "nessun simbolo TradingView noto per questo strumento"
-    try:
-        from tradingview_screener import Query
-    except Exception as e:
-        return None, {}, f"libreria tradingview-screener non disponibile ({e})"
-    import time
-    err = None
+    cols = list(TV_COLONNE)
+    err, righe = None, None
     for tentativo in range(3):
         try:
-            n, df = Query().select(*TV_COLONNE.keys()).set_tickers(*candidati).get_scanner_data()
+            r = requests.post(TV_URL, headers=TV_HEADERS, timeout=20,
+                              json={"symbols": {"tickers": candidati}, "columns": cols})
+            r.raise_for_status()
+            righe = r.json().get("data") or []
             err = None
             break
         except Exception as e:
@@ -204,9 +218,8 @@ def screener_tv(candidati: list[str]) -> tuple[str | None, dict, str | None]:
             time.sleep(2 * (tentativo + 1))
     if err:
         return None, {}, f"{err} (dopo 3 tentativi)"
-    if not n or df is None or df.empty:
-        return None, {}, f"lo screener non ha restituito righe per {', '.join(candidati)}"
-    ordine = {c: i for i, c in enumerate(candidati)}
-    df = df.assign(_o=df["ticker"].map(ordine)).sort_values("_o")
-    r = df.iloc[0]
-    return r["ticker"], {k: r.get(k) for k in TV_COLONNE}, None
+    per_tk = {x.get("s"): x.get("d") for x in righe}
+    for tk in candidati:
+        if tk in per_tk and per_tk[tk]:
+            return tk, dict(zip(cols, per_tk[tk])), None
+    return None, {}, f"lo screener non ha restituito righe per {', '.join(candidati)}"

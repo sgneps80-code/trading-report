@@ -3,7 +3,7 @@
 verifica_fonti.py — SOLO verifica delle fonti dati, non e' lo strumento finale.
 
 Uso (Windows, PC di casa):
-    py -m pip install yfinance tradingview-screener requests
+    py -m pip install yfinance requests
     py verifica_fonti.py
 
 Scrive il risultato in  %USERPROFILE%\\Downloads\\verifica_fonti_<data>.md
@@ -30,15 +30,15 @@ SIMBOLI = {
     "SNY":        ["NASDAQ:SNY"],
     "OMER.MI":    ["MIL:OMER", "EURONEXT:OMER"],
     "SOM.MI":     ["MIL:SOM"],
-    "ISP.MI":     ["MIL:ISP"],
-    "GBSE.MI":    ["MIL:GBSE"],
-    "XUSE.MI":    ["MIL:XUSE"],
+    "ISP.MI":     ["MIL:ISP", "EURONEXT:ISP"],
+    "GBSE.MI":    ["MIL:GBSE", "EURONEXT:GBSE"],
+    "XUSE.MI":    ["MIL:XUSE", "EURONEXT:XUSE"],
     "REY.MI":     ["MIL:REY"],
     "ENI.MI":     ["MIL:ENI"],
-    "EURUSD=X":   ["FX:EURUSD", "FX_IDC:EURUSD"],
+    "EURUSD=X":   ["FX_IDC:EURUSD", "FX:EURUSD"],
     "GC=F":       ["COMEX:GC1!"],
     "XAUUSD=X":   ["OANDA:XAUUSD", "TVC:GOLD"],
-    "FTSEMIB.MI": ["INDEX:FTSEMIB", "TVC:FTMIB", "MIL:FTSEMIB"],
+    "FTSEMIB.MI": ["INDEX:FTSEMIB", "TVC:FTMIB"],
     "^FCHI":      ["EURONEXT:PX1", "TVC:CAC40"],
 }
 
@@ -155,38 +155,29 @@ def indicatori_locali(d):
 
 
 def verifica_tradingview(campioni):
-    out("\n## 2. tradingview-screener (confronto incrociato)\n")
+    """Chiamata diretta allo screener (senza i filtri predefiniti della
+    libreria tradingview-screener, che escludono ADR, ETF/ETC, cambi, indici)."""
+    out("\n## 2. Screener TradingView (confronto incrociato)\n")
+    cols = ["close", "RSI", "ATR", "SMA50", "EMA20"]
+    H = {"User-Agent": UA["User-Agent"], "Content-Type": "application/json",
+         "Origin": "https://www.tradingview.com", "Referer": "https://www.tradingview.com/"}
+    tutti = [t for c in SIMBOLI.values() for t in c]
     try:
-        from tradingview_screener import Query
-        import tradingview_screener
-        from importlib.metadata import version
-        out(f"tradingview-screener {version('tradingview-screener')}\n")
+        r = requests.post("https://scanner.tradingview.com/global/scan", headers=H, timeout=20,
+                          json={"symbols": {"tickers": tutti}, "columns": cols})
+        dati = {x["s"]: dict(zip(cols, x["d"])) for x in (r.json().get("data") or [])}
     except Exception as e:
-        out(f"Libreria non importabile: {e}")
+        out(f"Screener non raggiungibile: {e}")
         return
-    cols = ["name", "close", "RSI", "ATR", "SMA50", "EMA20", "currency", "type", "exchange"]
     out("| Yahoo | Ticker TV | close TV | RSI TV | RSI locale | ATR TV | ATR locale | SMA50 TV | SMA50 locale | EMA20 TV | EMA20 locale |")
     out("|---|---|---|---|---|---|---|---|---|---|---|")
+    f = lambda v: "-" if v is None or (isinstance(v, float) and pd.isna(v)) else f"{v:.4f}"
     for ysym, cands in SIMBOLI.items():
-        trovato, errori = None, []
-        for tv in cands:
-            for tentativo in range(3):
-                try:
-                    n, df = Query().select(*cols).set_tickers(tv).get_scanner_data()
-                    if n:
-                        trovato = (tv, df.iloc[0])
-                    else:
-                        errori.append(f"{tv}: nessuna riga")
-                    break
-                except Exception as e:
-                    errori.append(f"{tv}: {type(e).__name__} {str(e)[:60]}")
-                    __import__("time").sleep(2 * (tentativo + 1))
-            if trovato:
-                break
-        if not trovato:
-            out(f"| {ysym} | non trovato ({'; '.join(errori)[:200]}) | | | | | | | | | |")
+        tv = next((c for c in cands if c in dati), None)
+        if not tv:
+            out(f"| {ysym} | nessuno tra {', '.join(cands)} | | | | | | | | | |")
             continue
-        tv, r = trovato
+        r = dati[tv]
         loc = {}
         d = campioni.get(ysym)
         if d is not None and len(d) > 60:
@@ -194,7 +185,6 @@ def verifica_tradingview(campioni):
                 loc = indicatori_locali(d)
             except Exception:
                 loc = {}
-        f = lambda v: "-" if v is None or (isinstance(v, float) and pd.isna(v)) else f"{v:.4f}"
         out(f"| {ysym} | {tv} | {f(r.get('close'))} | {f(r.get('RSI'))} | {f(loc.get('RSI'))} | "
             f"{f(r.get('ATR'))} | {f(loc.get('ATR'))} | {f(r.get('SMA50'))} | {f(loc.get('SMA50'))} | "
             f"{f(r.get('EMA20'))} | {f(loc.get('EMA20'))} |")

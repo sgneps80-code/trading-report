@@ -1,7 +1,6 @@
 # Dipendenze del solo workflow "Analisi tecnica" (genera_analisi.py),
 # separate da requirements.txt per non toccare il report giornaliero.
 yfinance==1.7.0
-tradingview-screener==3.2.2
 pandas>=2.2
 numpy>=1.26
 cryptography>=42

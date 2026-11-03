@@ -642,7 +642,7 @@ class Analisi:
         return "\n".join(out)
 
     def sez_tv(self, n: int) -> str:
-        cand = [self.st.tv] if self.st.tv else D.simbolo_tv_default(self.st.simbolo)
+        cand = list(dict.fromkeys(([self.st.tv] if self.st.tv else []) + D.simbolo_tv_default(self.st.simbolo)))
         tk, vals, err = D.screener_tv(cand)
         out = [f"## {n}. Controllo incrociato con lo screener TradingView (letto {D.fmt_ora(D.ora_roma())})\n"]
         if err:
