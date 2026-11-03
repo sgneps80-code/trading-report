@@ -1,6 +1,6 @@
 """
 Scaricamento dati: Yahoo Finance via yfinance (storico OHLCV NON aggiustato,
-dividendi, split, calendario eventi) e screener TradingView via
+dividendi, split, calendario eventi) e
 screener TradingView (endpoint scanner, solo per il controllo incrociato degli indicatori).
 
 Regola: nessun dato stimato. Se una chiamata fallisce si registra il

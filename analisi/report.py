@@ -641,25 +641,82 @@ class Analisi:
         out.append(tabella(["Campo", "Valore"], righe))
         return "\n".join(out)
 
+    def confronto_tv(self):
+        """(ticker, righe [nome, tv, calcolato], errore) - una sola chiamata per strumento."""
+        if not hasattr(self, "_tv"):
+            cand = list(dict.fromkeys(([self.st.tv] if self.st.tv else []) + D.simbolo_tv_default(self.st.simbolo)))
+            tk, vals, err = D.screener_tv(cand)
+            righe = []
+            for col_tv, col in D.TV_COLONNE.items():
+                righe.append([col, vals.get(col_tv), self.ultimo if col == "Chiusura" else self.v(col)])
+            self._tv = (tk, righe, err, D.ora_roma())
+        return self._tv
+
+    @staticmethod
+    def _scarto_pct(tv, mio):
+        return None if _nan(tv) or mio is None or not tv else (mio / tv - 1) * 100
+
+    def avvisi_tv(self) -> list[str]:
+        """Scarti non spiegabili dalla sola differenza dell'ultimo prezzo."""
+        tk, righe, err, _ = self.confronto_tv()
+        if err:
+            return []
+        d = {r[0]: self._scarto_pct(r[1], r[2]) for r in righe}
+        tvc = {r[0]: r[1] for r in righe}
+        out = []
+        sc = d.get("Chiusura")
+        if sc is not None and abs(sc) > 1:
+            msg = (f"Chiusura Yahoo {fn(self.ultimo, 4)} contro TradingView {tk} {fn(tvc['Chiusura'], 4)} "
+                   f"(scarto {sc:+.2f}%, rapporto TV/Yahoo {tvc['Chiusura'] / self.ultimo:.4f})")
+            fx = self.arch.get("EURUSD=X")
+            if fx.ok:
+                e = float(fx.giornaliero["Close"].iloc[-1])
+                r = tvc["Chiusura"] / self.ultimo
+                if abs(r / e - 1) < 0.005 or abs(r * e - 1) < 0.005:
+                    msg += f"; il rapporto coincide con il cambio EURUSD {e:.4f}: le due fonti quotano probabilmente linee in valute diverse"
+            out.append(msg + ".")
+        strutt = {k: d.get(k) for k in ("ATR14", "ADX", "SMA50", "SMA200")}
+        if (sc is None or abs(sc) <= 1) and ((strutt["ATR14"] is not None and abs(strutt["ATR14"]) > 5)
+                                             or (strutt["SMA50"] is not None and abs(strutt["SMA50"]) > 1)):
+            out.append("Indicatori diversi da TradingView a parità di prezzo ("
+                       + ", ".join(f"{k} {v:+.1f}%" for k, v in strutt.items() if v is not None)
+                       + "): i massimi/minimi giornalieri di Yahoo per questo strumento non coincidono con quelli di TradingView; "
+                       "ATR, ADX, stocastico, livelli e distanze in ATR del file possono differire dai grafici TradingView.")
+        return out
+
     def sez_tv(self, n: int) -> str:
-        cand = list(dict.fromkeys(([self.st.tv] if self.st.tv else []) + D.simbolo_tv_default(self.st.simbolo)))
-        tk, vals, err = D.screener_tv(cand)
-        out = [f"## {n}. Controllo incrociato con lo screener TradingView (letto {D.fmt_ora(D.ora_roma())})\n"]
+        tk, righe, err, quando = self.confronto_tv()
+        out = [f"## {n}. Controllo incrociato con lo screener TradingView (letto {D.fmt_ora(quando)})\n"]
         if err:
             out.append(nd(err))
             return "\n".join(out)
-        righe = []
-        for col_tv, col in D.TV_COLONNE.items():
-            tv = vals.get(col_tv)
-            mio = self.ultimo if col == "Chiusura" else self.v(col)
+        tab = []
+        for nome, tv, mio in righe:
             if _nan(tv) or mio is None:
-                righe.append([col, fn(tv, 4), fn(mio, 4), "n.d.", "n.d."])
-                continue
-            righe.append([col, fn(tv, 4), fn(mio, 4), fn(mio - tv, 4, True), fn((mio / tv - 1) * 100 if tv else None, 3, True)])
+                tab.append([nome, fn(tv, 4), fn(mio, 4), "n.d.", "n.d."])
+            else:
+                tab.append([nome, fn(tv, 4), fn(mio, 4), fn(mio - tv, 4, True), fn(self._scarto_pct(tv, mio), 3, True)])
         out.append(f"Ticker {tk}; TradingView = sua barra giornaliera corrente, Calcolato = ultima barra Yahoo del {fdata(self.oggi)}. "
                    "A mercato aperto gli scarti riflettono soprattutto la differenza dell'ultimo prezzo.\n")
-        out.append(tabella(["Indicatore", "TradingView", "Calcolato", "Scarto", "Scarto %"], righe))
+        for a in self.avvisi_tv():
+            out.append(f"**ATTENZIONE**: {a}\n")
+        out.append(tabella(["Indicatore", "TradingView", "Calcolato", "Scarto", "Scarto %"], tab))
         return "\n".join(out)
+
+    def riga_tv_sintesi(self) -> str:
+        try:
+            tk, righe, err, quando = self.confronto_tv()
+        except Exception as e:                  # noqa: BLE001
+            return f"**Controllo TradingView**: {nd(f'{type(e).__name__}')}"
+        if err:
+            return f"**Controllo TradingView**: {nd(err)}"
+        d = {r[0]: r for r in righe}
+        parti = [f"{k} TV {fn(d[k][1], 4)} / calc. {fn(d[k][2], 4)} ({fn(self._scarto_pct(d[k][1], d[k][2]), 2, True)}%)"
+                 for k in ("Chiusura", "RSI14", "ATR14", "SMA50") if k in d]
+        txt = f"**Controllo TradingView** ({tk}, {D.fmt_ora(quando)}): " + "; ".join(parti) + "."
+        for a in self.avvisi_tv():
+            txt += f" **ATTENZIONE**: {a}"
+        return txt
 
     def sez_grezzi(self, n: int) -> str:
         dp = self.dp
@@ -740,6 +797,10 @@ def documento_titolo(st: Strumento, cfg: dict) -> str:
     avvisi = []
     if a.incompleta:
         avvisi.append("**ATTENZIONE: mercato aperto. L'ultima barra giornaliera (e settimanale) è incompleta; volume parziale.**")
+    try:
+        avvisi += [f"**ATTENZIONE qualità del dato**: {x}" for x in a.avvisi_tv()]
+    except Exception:                            # noqa: BLE001 - la sezione 14 riporterà l'errore
+        pass
     totali = None
     if st.posizione.get("quantita"):
         x = a.posizione_numeri()
@@ -789,6 +850,7 @@ def _blocco_sintesi(a: Analisi, totali: dict, k: int) -> str:
              f"{TIPI_ZAINETTO.get(st.tipo, 'n.d.')} · ultima seduta {fdata(a.oggi)}{' (INCOMPLETA, mercato aperto)' if a.incompleta else ''} · "
              f"fonte {a.s.fonte}, {D.fmt_ora(a.s.scaricato_alle)}"
              + (f" · errori fonte: {a.s.errori}" if a.s.errori else ""))
+    r.append(a.riga_tv_sintesi())
     ora = D.ultimo_orario(a.s)
     rr = a.df.iloc[-1]
     r.append(f"**Prezzo** {a.p(a.ultimo)} (orario {D.fmt_ora(ora) if ora is not None else 'n.d.'}); O/H/L {a.p(rr['Open'])}/{a.p(rr['High'])}/{a.p(rr['Low'])}; "
