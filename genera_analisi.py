@@ -65,8 +65,9 @@ def da_evento() -> None:
     modo = (inp.get("modo") or "titolo").strip()
     simbolo = (inp.get("simbolo") or "").strip() or None
     cfg = json.loads(inp.get("config_json") or "{}")
-    password = os.environ.get("SITE_PASSWORD", "")
     prova = str(inp.get("prova") or "").lower() == "true"
+    if not prova and not (inp.get("chiave") or "").strip():
+        raise SystemExit("Chiave di cifratura assente: la pagina va aggiornata (Ctrl+F5)")
     log.info(f"Richiesta {rid}: modo={modo}, strumenti in watchlist={len(cfg.get('strumenti', []))}")
     nome, testo = genera(modo, simbolo, cfg)
     out_dir = Path(os.environ.get("ANALISI_OUT", "out_analisi"))
@@ -78,10 +79,12 @@ def da_evento() -> None:
         (out_dir / f"{rid}.md").write_text(testo, encoding="utf-8")
         (out_dir / f"{rid}.nome").write_text(nome, encoding="utf-8")
     else:
-        if not password:
-            raise SystemExit("Secret SITE_PASSWORD assente: impossibile cifrare il file, nessun output")
-        from analisi.cifra import cifra
-        (out_dir / f"{rid}.json").write_text(cifra(testo, nome, password), encoding="utf-8")
+        from analisi.cifra import chiave_da_b64, cifra
+        try:
+            chiave = chiave_da_b64((inp.get("chiave") or "").strip())
+        except ValueError as e:
+            raise SystemExit(f"Chiave di cifratura non valida ({e}): nessun output")
+        (out_dir / f"{rid}.json").write_text(cifra(testo, nome, chiave), encoding="utf-8")
     log.info(f"Creato {nome}: {len(testo)} caratteri")
 
 

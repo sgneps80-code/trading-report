@@ -74,6 +74,11 @@ def test_portafoglio():
 
 
 def test_cifratura():
-    from analisi.cifra import cifra, decifra
-    blob = cifra("testo è", "a.md", "pw")
-    assert decifra(blob, "pw") == {"nome": "a.md", "md": "testo è"}
+    import base64
+    import os
+    from analisi.cifra import chiave_da_b64, cifra, decifra
+    k = chiave_da_b64(base64.b64encode(os.urandom(32)).decode())
+    blob = cifra("testo è", "a.md", k)
+    assert decifra(blob, k) == {"nome": "a.md", "md": "testo è"}
+    with pytest.raises(ValueError):
+        chiave_da_b64(base64.b64encode(b"corta").decode())

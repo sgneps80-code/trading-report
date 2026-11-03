@@ -2,8 +2,8 @@ name: Analisi tecnica
 
 # Avviato dal pulsante "Titolo"/"Portafoglio" nella sezione
 # "Analisi tecnica per Claude" della pagina del report. Genera il file .md,
-# lo CIFRA con la password del sito (secret SITE_PASSWORD) e lo pubblica sul
-# branch analisi-output, da dove la pagina lo scarica e lo decifra.
+# lo CIFRA con una chiave casuale creata dalla pagina per questa sola richiesta
+# e lo pubblica sul branch analisi-output, da dove la pagina lo scarica e lo decifra.
 # Il repo è pubblico: nessun dato personale in chiaro né nei log né nei file.
 
 run-name: "analisi ${{ inputs.request_id }}"
@@ -26,6 +26,10 @@ on:
         description: 'Watchlist, posizioni e liquidità dalla pagina (dato personale: mascherato)'
         required: false
         default: '{}'
+      chiave:
+        description: 'Chiave AES casuale di questa richiesta, base64 (mascherata)'
+        required: false
+        default: ''
       prova:
         description: 'Solo per file di prova con dati fittizi marcati dati_di_prova: output non cifrato'
         required: false
@@ -48,10 +52,12 @@ jobs:
         # Stesso schema di trading_report.yml: il valore si legge dal payload
         # dell'evento a runtime, mai con ${{ }} nel testo del comando.
         run: |
-          valore=$(python3 -c "import json; print(json.load(open('$GITHUB_EVENT_PATH', encoding='utf-8')).get('inputs', {}).get('config_json') or '')")
-          if [ -n "$valore" ] && [ "$valore" != "{}" ]; then
-            echo "::add-mask::$valore"
-          fi
+          for campo in config_json chiave; do
+            valore=$(python3 -c "import json; print(json.load(open('$GITHUB_EVENT_PATH', encoding='utf-8')).get('inputs', {}).get('$campo') or '')")
+            if [ -n "$valore" ] && [ "$valore" != "{}" ]; then
+              echo "::add-mask::$valore"
+            fi
+          done
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -66,7 +72,6 @@ jobs:
 
       - name: Genera il file
         env:
-          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
           ANALISI_OUT: out_analisi
         run: python genera_analisi.py --da-evento
 

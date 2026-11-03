@@ -7,9 +7,11 @@ Inserita da generate_report.build_html. Tutto avviene nel browser:
 - i pulsanti "Titolo" e "Portafoglio" avviano il workflow
   analisi_tecnica.yml con il token GitHub gia' salvato in "Sincronizza
   dati personali" (stesso meccanismo del resto della pagina);
-- il workflow pubblica il file CIFRATO (AES-GCM, chiave derivata dalla
-  password del sito) sul branch analisi-output; la pagina lo scarica,
-  lo decifra e lo salva come .md nella cartella Download del browser.
+- a ogni clic la pagina crea una chiave AES casuale, la passa al workflow
+  (input mascherato) e la tiene solo in memoria; il workflow pubblica il
+  file CIFRATO con quella chiave sul branch analisi-output; la pagina lo
+  scarica, lo decifra e lo salva come .md nella cartella Download.
+  Nessuna password da inserire.
 """
 
 SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
@@ -36,11 +38,6 @@ _HTML = r"""
     </div>
     <p id="at-status" style="font-size:13px;margin:8px 0;min-height:18px"></p>
 
-    <div id="at-chiave" style="display:none;background:#fff7ed;border-radius:8px;padding:12px;margin-bottom:12px;font-size:13px">
-      Per decifrare il file serve la password del sito (la stessa dell'accesso), solo la prima volta su questo browser:
-      <input id="at-pwd" type="password" style="padding:6px;border:1px solid #ddd;border-radius:6px;margin-left:6px">
-      <button class="at-btn" onclick="atChiaveDaCampo()">Conferma</button>
-    </div>
 
     <div style="overflow-x:auto">
     <table id="at-tab" style="width:100%;border-collapse:collapse;font-size:12px;min-width:1200px">
@@ -85,8 +82,8 @@ _HTML = r"""
 </style>
 <script>
 (function () {
-  const LS = "at_config_v1", LS_KEY = "tr_akey";
-  const SALE = "trading-report/analisi-tecnica/v1", ITER = 310000;
+  const LS = "at_config_v1";
+  try { localStorage.removeItem("tr_akey"); } catch (e) {}   // chiave della versione precedente, non più usata
   const CAMPI = ["simbolo","nome","isin","mercato","valuta","tipo","benchmark","tv","collegati","quantita","carico","stop","target","uscita"];
   const TIPI = ["","azione","etf","etc","obbligazione","certificato"];
 
@@ -229,33 +226,12 @@ _HTML = r"""
     inp.value = "";
   };
 
-  // ─── chiave di decifratura (dalla password del sito) ─────────────────────
-  async function derivaChiave(pwd) {
-    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pwd), "PBKDF2", false, ["deriveBits"]);
-    const bits = await crypto.subtle.deriveBits({name: "PBKDF2", hash: "SHA-256", salt: new TextEncoder().encode(SALE), iterations: ITER}, base, 256);
-    return btoa(String.fromCharCode(...new Uint8Array(bits)));
-  }
-  window.analisiSalvaChiave = async function (pwd) {
-    try { if (pwd) localStorage.setItem(LS_KEY, await derivaChiave(pwd)); } catch (e) {}
-  };
-  window.atChiaveDaCampo = async function () {
-    const pwd = document.getElementById("at-pwd").value;
-    if (typeof HASH !== "undefined" && HASH) {
-      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(pwd));
-      const h = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
-      if (h !== HASH) { stato("❌ Password errata", "#dc2626"); return; }
-    }
-    await analisiSalvaChiave(pwd);
-    document.getElementById("at-chiave").style.display = "none";
-    stato("Chiave salvata in questo browser. Ripeti la richiesta.", "#16a34a");
-  };
-  async function decifra(blob) {
-    const k = localStorage.getItem(LS_KEY);
-    const raw = Uint8Array.from(atob(k), c => c.charCodeAt(0));
-    const key = await crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["decrypt"]);
-    const iv = Uint8Array.from(atob(blob.iv), c => c.charCodeAt(0));
-    const ct = Uint8Array.from(atob(blob.ct), c => c.charCodeAt(0));
-    const pt = await crypto.subtle.decrypt({name: "AES-GCM", iv}, key, ct);
+  // ─── cifratura: chiave casuale per ogni richiesta, solo in memoria ───────
+  const b64 = u8 => btoa(String.fromCharCode(...u8));
+  const deB64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+  async function decifra(blob, chiaveRaw) {
+    const key = await crypto.subtle.importKey("raw", chiaveRaw, "AES-GCM", false, ["decrypt"]);
+    const pt = await crypto.subtle.decrypt({name: "AES-GCM", iv: deB64(blob.iv)}, key, deB64(blob.ct));
     return JSON.parse(new TextDecoder().decode(pt));
   }
 
@@ -270,7 +246,6 @@ _HTML = r"""
 
   async function richiedi(modo, simbolo) {
     if (occupato) return;
-    if (!localStorage.getItem(LS_KEY)) { document.getElementById("at-chiave").style.display = "block"; stato("Serve la password per decifrare", "#d97706"); return; }
     const cfg = daTabella(); scrivi(cfg);
     if (modo === "titolo" && !/^[A-Za-z0-9.\-\^=]{1,24}$/.test(simbolo || "")) { stato("Simbolo non valido", "#dc2626"); return; }
     if (modo === "portafoglio" && !cfg.strumenti.length) { stato("Watchlist vuota", "#dc2626"); return; }
@@ -279,7 +254,9 @@ _HTML = r"""
     try {
       const g = gh();
       const rid = Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, "0")).join("");
-      const inputs = {request_id: rid, modo, simbolo: modo === "titolo" ? simbolo.toUpperCase() : "", config_json: JSON.stringify(cfg)};
+      const chiaveRaw = crypto.getRandomValues(new Uint8Array(32));
+      const inputs = {request_id: rid, modo, simbolo: modo === "titolo" ? simbolo.toUpperCase() : "",
+                      config_json: JSON.stringify(cfg), chiave: b64(chiaveRaw)};
       const r = await fetch(`https://api.github.com/repos/${g.o}/${g.r}/actions/workflows/analisi_tecnica.yml/dispatches`,
                             {method: "POST", headers: {...g.h, "Content-Type": "application/json"}, body: JSON.stringify({ref: "main", inputs})});
       if (r.status !== 204) throw new Error(`avvio workflow: HTTP ${r.status} ${await r.text()}`);
@@ -292,7 +269,7 @@ _HTML = r"""
         const f = await fetch(`https://api.github.com/repos/${g.o}/${g.r}/contents/${rid}.json?ref=analisi-output&t=${Date.now()}`,
                               {headers: {...g.h, "Accept": "application/vnd.github.raw+json"}, cache: "no-store"});
         if (f.status === 200) {
-          const doc = await decifra(await f.json());
+          const doc = await decifra(await f.json(), chiaveRaw);
           const a = document.createElement("a");
           a.href = URL.createObjectURL(new Blob([doc.md], {type: "text/markdown;charset=utf-8"}));
           a.download = doc.nome; document.body.appendChild(a); a.click(); a.remove();
@@ -309,8 +286,7 @@ _HTML = r"""
         }
       }
     } catch (e) {
-      stato("❌ " + (e.name === "OperationError" ? "decifratura fallita: la password salvata non corrisponde a SITE_PASSWORD (reinseriscila)" : e.message), "#dc2626");
-      if (e.name === "OperationError") { localStorage.removeItem(LS_KEY); document.getElementById("at-chiave").style.display = "block"; }
+      stato("❌ " + (e.name === "OperationError" ? "decifratura fallita (file corrotto o non di questa richiesta): riprova" : e.message), "#dc2626");
     } finally {
       occupato = false;
       document.querySelectorAll("#analisi-tecnica .at-btn").forEach(b => b.disabled = false);

@@ -1612,8 +1612,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   async function unlock() {{
     const h = await sha256(document.getElementById("pwd").value);
     if (h === HASH) {{
-      // chiave per decifrare i file di "Analisi tecnica" (vedi analisi_ui.py)
-      if (window.analisiSalvaChiave) analisiSalvaChiave(document.getElementById("pwd").value);
       document.getElementById("lock").style.display = "none";
       document.getElementById("report").style.display = "block";
       localStorage.setItem("tr_auth", h);

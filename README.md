@@ -153,8 +153,9 @@ manca è scritto "n.d." con il motivo.
 ### Come si avvia
 
 1. Apri la pagina del report ed entra con la password.
-2. La prima volta: in "Sincronizza dati personali" devono esserci utente,
-   repository e token GitHub (gli stessi già usati per caricare il dossier).
+2. Su ogni PC/browser, la prima volta: in "Sincronizza dati personali" devono
+   esserci utente, repository e token GitHub (gli stessi già usati per caricare
+   il dossier).
 3. **📄 Titolo**: scrivi il simbolo Yahoo (es. `SAN.PA`) e premi Titolo,
    oppure premi 📄 sulla riga della watchlist. File completo con dati grezzi.
 4. **📚 Portafoglio**: tutte le righe della watchlist (posizioni comprese),
@@ -194,12 +195,11 @@ Se il browser chiede ogni volta dove salvare:
 - Watchlist, posizioni e liquidità restano **solo nel browser**
   (localStorage): non sono nel repo pubblico.
 - Al clic vengono passati al workflow `analisi_tecnica.yml` come input
-  mascherato nei log. Il file prodotto viene **cifrato** (AES-256-GCM, chiave
-  derivata dalla password del sito, secret `SITE_PASSWORD`) e pubblicato sul
-  branch `analisi-output`, che contiene solo i file cifrati delle ultime 24 ore.
-  La pagina lo scarica, lo decifra nel browser e lo salva.
-- La chiave di decifratura si salva nel browser quando entri con la password;
-  se manca, la sezione la chiede una volta.
+  mascherato nei log, insieme a una **chiave casuale nuova per ogni richiesta**
+  creata dalla pagina. Il file prodotto viene **cifrato** con quella chiave
+  (AES-256-GCM) e pubblicato sul branch `analisi-output`, che contiene solo i
+  file cifrati delle ultime 24 ore. La pagina, che tiene la chiave solo in
+  memoria, lo scarica, lo decifra e lo salva. Nessuna password da inserire.
 
 ### Fonti e verifiche
 

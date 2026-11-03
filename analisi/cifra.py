@@ -2,39 +2,40 @@
 Cifratura del file prodotto dal workflow: il repo e' pubblico, quindi il
 file (che contiene posizioni e liquidita') viaggia solo cifrato.
 
-AES-256-GCM con chiave = PBKDF2-HMAC-SHA256(password del sito, SALE, ITER).
-La pagina deriva la stessa chiave con WebCrypto quando inserisci la
-password e decifra nel browser. Il sale e' fisso e pubblico (serve solo
-a separare questa chiave da altri usi della stessa password).
+AES-256-GCM con una chiave CASUALE generata dalla pagina a ogni richiesta
+(32 byte, base64), passata al workflow come input mascherato insieme alla
+watchlist e tenuta dalla pagina solo in memoria per decifrare il file.
+Nessuna password da ricordare o inserire.
 """
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import os
 
-SALE = b"trading-report/analisi-tecnica/v1"
-ITER = 310_000
+
+def chiave_da_b64(b64: str) -> bytes:
+    try:
+        k = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("chiave non in base64") from None
+    if len(k) != 32:
+        raise ValueError("la chiave deve essere di 32 byte")
+    return k
 
 
-def deriva_chiave(password: str) -> bytes:
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    return PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=SALE, iterations=ITER).derive(password.encode("utf-8"))
-
-
-def cifra(testo: str, nome_file: str, password: str) -> str:
+def cifra(testo: str, nome_file: str, chiave: bytes) -> str:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     iv = os.urandom(12)
     payload = json.dumps({"nome": nome_file, "md": testo}, ensure_ascii=False).encode("utf-8")
-    ct = AESGCM(deriva_chiave(password)).encrypt(iv, payload, None)
-    return json.dumps({"v": 1, "alg": "AES-256-GCM", "kdf": "PBKDF2-SHA256", "iter": ITER,
-                       "sale": SALE.decode(), "iv": base64.b64encode(iv).decode(),
+    ct = AESGCM(chiave).encrypt(iv, payload, None)
+    return json.dumps({"v": 2, "alg": "AES-256-GCM", "iv": base64.b64encode(iv).decode(),
                        "ct": base64.b64encode(ct).decode()})
 
 
-def decifra(blob: str, password: str) -> dict:
+def decifra(blob: str, chiave: bytes) -> dict:
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     d = json.loads(blob)
-    pt = AESGCM(deriva_chiave(password)).decrypt(base64.b64decode(d["iv"]), base64.b64decode(d["ct"]), None)
+    pt = AESGCM(chiave).decrypt(base64.b64decode(d["iv"]), base64.b64decode(d["ct"]), None)
     return json.loads(pt)
