@@ -13,8 +13,9 @@ utente carichi:
 - "Portafoglio di sintesi" (snapshot delle posizioni attuali: Titolo, ISIN,
   Simbolo, Mercato, Strumento, Valuta, Quantità, P.zo medio di carico...) —
   ogni riga è già una posizione aperta, niente FIFO da fare. Non contiene
-  una data di apertura: i giorni di detenzione restano n.d. per queste
-  posizioni, non è un dato che questo export fornisce.
+  una data di apertura: la si ricava dallo storico movimenti accumulato
+  dai caricamenti precedenti, quando la sua ricostruzione combacia con la
+  quantità attuale (vedi date_da_storico); altrimenti resta n.d. col motivo.
 
 Entrambi i formati arrivano sia come .xlsx (ZIP/OOXML, letto con openpyxl)
 sia come .xls vecchio formato binario (OLE2/Compound File, letto con xlrd —
@@ -98,9 +99,12 @@ _HEADER_SINTESI = {
 # Suffisso stile Yahoo/broker (es. "ISP.MI") -> prefisso exchange TradingView.
 # Serve solo a suggerire un ticker di partenza nell'editor: l'utente lo
 # corregge se sbagliato, non viene mai usato come dato certo.
+# "O"/"OQ"/"N" sono i suffissi Reuters per Nasdaq e NYSE (es. "SNY.O"), usati
+# da alcuni broker per i titoli USA.
 _SUFFISSO_A_EXCHANGE_TV = {
     "MI": "MIL", "PA": "EURONEXT", "AS": "EURONEXT", "BR": "EURONEXT", "LS": "EURONEXT",
     "DE": "XETR", "F": "FWB", "L": "LSE", "SW": "XSWX", "MC": "BME",
+    "O": "NASDAQ", "OQ": "NASDAQ", "N": "NYSE",
 }
 
 
@@ -273,9 +277,11 @@ def build_fifo_positions(movimenti):
 
         tot_qty = sum(l["qty"] for l in lots)
         avg_price = sum(l["qty"] * l["prezzo"] for l in lots) / tot_qty
-        # Data di apertura media, pesata per quantita' sui lotti ancora aperti
-        avg_ord = sum(l["qty"] * l["data"].toordinal() for l in lots) / tot_qty
-        entry_date = date.fromordinal(round(avg_ord))
+        # Data del primo acquisto ancora in essere (il lotto FIFO piu' vecchio
+        # non ancora venduto): e' da li' che la posizione e' aperta senza
+        # interruzioni. Una media pesata sui lotti la farebbe sembrare piu'
+        # giovane a ogni acquisto successivo, nascondendo la permanenza reale.
+        entry_date = lots[0]["data"]
         # "Data valuta" e' la data di regolamento, non quella dell'ordine:
         # per un acquisto fatto oggi puo' cadere 1-2 giorni nel futuro
         # (T+1/T+2), dando un conteggio negativo altrimenti privo di senso.
@@ -289,6 +295,8 @@ def build_fifo_positions(movimenti):
             "prezzo_medio": round(avg_price, 4),
             "data_apertura": entry_date.isoformat(),
             "giorni_detenzione": holding_days,
+            "tranche": len(lots),
+            "data_apertura_motivo": None,
             "simbolo_broker": "",
             "tipo_broker": "Azione",
         })
@@ -320,11 +328,50 @@ def _estrai_posizioni_sintesi(righe, cols):
             "prezzo_medio": round(prezzo_medio, 4) if prezzo_medio is not None else None,
             "data_apertura": None,
             "giorni_detenzione": None,
+            "tranche": None,
+            "data_apertura_motivo": "l'export 'Portafoglio di sintesi' non contiene date",
             "simbolo_broker": str(rec.get("simbolo") or "").strip(),
             "tipo_broker": _tipo_da_strumento(rec.get("strumento")),
         })
     logger.info(f"Posizioni lette da 'Portafoglio di sintesi': {len(out)}")
     return out
+
+
+def date_da_storico(posizioni, movimenti, tolleranza=1e-4):
+    """Lo snapshot 'Portafoglio di sintesi' non ha date, ma lo storico movimenti
+    accumulato dai caricamenti precedenti si'. Per ogni posizione la data del
+    primo acquisto ancora in essere viene presa dalla ricostruzione FIFO dello
+    storico SOLO se la quantita' ricostruita coincide con quella dello snapshot:
+    se non coincide lo storico e' rimasto indietro (operazioni successive
+    all'ultimo export movimenti) e la data sarebbe sbagliata — in quel caso si
+    dice perche' manca, invece di mostrarne una plausibile.
+    Quantita' e prezzo medio restano quelli dello snapshot (stato attuale)."""
+    if not posizioni:
+        return posizioni
+    if not movimenti:
+        for p in posizioni:
+            p["data_apertura_motivo"] = ("l'export 'Portafoglio di sintesi' non contiene date e non c'e' "
+                                         "uno storico movimenti caricato")
+        return posizioni
+    ricostruite = {r["isin"]: r for r in build_fifo_positions(movimenti)}
+    trovate = 0
+    for p in posizioni:
+        r = ricostruite.get(p["isin"])
+        if r is None:
+            p["data_apertura_motivo"] = ("nello storico movimenti questa posizione non risulta aperta: "
+                                         "carica un export 'Movimenti Dossier Titoli' aggiornato")
+        elif abs(r["quantita"] - p["quantita"]) > tolleranza:
+            p["data_apertura_motivo"] = (f"lo storico movimenti ricostruisce {r['quantita']:g} pezzi, il "
+                                         f"portafoglio ne ha {p['quantita']:g}: carica un export "
+                                         "'Movimenti Dossier Titoli' aggiornato")
+        else:
+            p["data_apertura"] = r["data_apertura"]
+            p["giorni_detenzione"] = r["giorni_detenzione"]
+            p["tranche"] = r["tranche"]
+            p["data_apertura_motivo"] = None
+            trovate += 1
+    logger.info(f"Date di apertura dallo storico movimenti: {trovate} su {len(posizioni)} posizioni")
+    return posizioni
 
 
 def _chiave_movimento(m):
@@ -445,7 +492,9 @@ def _carica_posizioni():
     i, cols = _trova_header(righe, _HEADER_SINTESI, ["isin", "prezzo_medio", "quantita"])
     if i is not None:
         logger.info(f"Formato dossier rilevato: Portafoglio di sintesi (da {origine})")
-        return _estrai_posizioni_sintesi(righe[i + 1:], cols), None
+        posizioni = _estrai_posizioni_sintesi(righe[i + 1:], cols)
+        date_da_storico(posizioni, _carica_movimenti_storico())
+        return posizioni, None
 
     logger.error(
         f"Intestazioni non riconosciute in {origine}: non corrispondono né a "
@@ -497,14 +546,19 @@ def sync_portfolio():
         symbol = (mapped or {}).get("tv_symbol") or guess_tv_symbol(p.get("simbolo_broker")) or p["isin"]
         out.append({
             "symbol": symbol,
+            # False = ticker solo suggerito dal simbolo broker, mai confermato nell'editor
+            "ticker_confermato": bool((mapped or {}).get("tv_symbol")),
             "name": (mapped or {}).get("name", p["titolo"]),
             "type": (mapped or {}).get("type", p.get("tipo_broker", "Azione")),
             "isin": p["isin"],
+            "titolo": p["titolo"],
             "quantita": p["quantita"],
             "prezzo_medio": p["prezzo_medio"],
             "divisa": p["divisa"],
             "data_apertura": p["data_apertura"],
             "giorni_detenzione": p["giorni_detenzione"],
+            "tranche": p.get("tranche"),
+            "data_apertura_motivo": p.get("data_apertura_motivo"),
         })
     if n_non_mappati:
         # Niente ISIN/nomi reali nel log: e' un repo pubblico, il log lo e' con lui.

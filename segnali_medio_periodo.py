@@ -83,7 +83,7 @@ def doppio_massimo(bars_settimanali, lookback=52, tolleranza=0.03, ritraccio_min
         if (max(p1, p2) - valle) / max(p1, p2) < ritraccio_min:
             continue
         return {
-            "tipo": "Doppio massimo", "data_picco1": bars[i1]["data"], "data_picco2": bars[i2]["data"],
+            "tipo": "Doppio massimo", "data_primo": bars[i1]["data"], "data_secondo": bars[i2]["data"],
             "distanza_pct": round(abs(p2 - p1) / p1 * 100, 1), "livello_conferma": round(valle, 4),
         }
     return None
@@ -108,7 +108,7 @@ def doppio_minimo(bars_settimanali, lookback=52, tolleranza=0.03, rimbalzo_min=0
         if (picco - min(p1, p2)) / min(p1, p2) < rimbalzo_min:
             continue
         return {
-            "tipo": "Doppio minimo", "data_picco1": bars[i1]["data"], "data_picco2": bars[i2]["data"],
+            "tipo": "Doppio minimo", "data_primo": bars[i1]["data"], "data_secondo": bars[i2]["data"],
             "distanza_pct": round(abs(p2 - p1) / p1 * 100, 1), "livello_conferma": round(picco, 4),
         }
     return None
@@ -158,11 +158,21 @@ def rottura_52_settimane(bars_settimanali):
     return None
 
 
-def cross_settimanale(bars_settimanali):
+# Oltre questo, un incrocio non e' piu' un segnale ma lo stato del trend di
+# lungo periodo (gia' mostrato nella colonna "Trend medio periodo").
+CROSS_MAX_GIORNI = 365
+
+
+def cross_settimanale(bars_settimanali, max_giorni=CROSS_MAX_GIORNI):
     """Golden/death cross EMA50-EMA200 calcolate su chiusure settimanali
-    (richiede ~200 settimane di storico, non giornaliero)."""
+    (richiede ~200 settimane di storico, non giornaliero).
+
+    Solo se l'incrocio e' visibile nei dati (certo) ed e' avvenuto entro
+    `max_giorni`. Con 5 anni di storico l'EMA200 settimanale consuma ~200
+    settimane di avvio: se lo stato non cambia nelle ~60 restanti, "da almeno
+    N giorni" e' solo il bordo della finestra dati, non la data dell'incrocio."""
     sopra, giorni, certo = ind.golden_death_cross(bars_settimanali, 50, 200)
-    if sopra is None:
+    if sopra is None or not certo or giorni > max_giorni:
         return None
     return {"tipo": "Golden cross" if sopra else "Death cross", "giorni_da_incrocio": giorni, "certo": certo}
 

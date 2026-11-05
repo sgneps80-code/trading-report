@@ -25,6 +25,25 @@ senza per più di un run.
 Il vecchio secret `PORTFOLIO_JSON` resta come ripiego se non hai ancora
 impostato `MOVIMENTI_XLSX_B64`: stesso principio, mai un file committato.
 
+### La pagina del report è cifrata (`SITE_PASSWORD`)
+
+`docs/index.html` è pubblicata da questo repo pubblico e contiene le
+posizioni. Il suo contenuto è **cifrato** (AES-256-GCM, chiave derivata dal
+secret `SITE_PASSWORD` con PBKDF2-SHA256 a 600.000 iterazioni, vedi
+`cifra_pagina.py`): nel file ci sono solo il blob cifrato e il codice che lo
+decifra nel browser quando inserisci la password. Il browser ricorda la
+chiave per 7 giorni.
+
+- **Usa una passphrase lunga** (4-5 parole a caso, o 20+ caratteri): il blob
+  è pubblico, quindi chiunque può provare password offline; la lentezza di
+  PBKDF2 rende inutile solo il tentativo su password lunghe.
+- **Senza `SITE_PASSWORD` il workflow si ferma** invece di pubblicare la
+  pagina in chiaro.
+- Cambiare la password: aggiorna il secret e rilancia il report; il browser
+  scarta la chiave vecchia e la richiede.
+- Le versioni della pagina committate **prima** della cifratura restano nella
+  cronologia git in chiaro finché la cronologia non viene riscritta.
+
 ## Sincronizzazione posizioni (conto B)
 
 Le posizioni aperte non si aggiornano più a mano. Il modo più semplice è

@@ -6,7 +6,7 @@ Analisi:   RSI + MACD + Trend EMA + Raccomandazione TV aggregata (26 indicatori)
 AI:        Anthropic Claude Haiku
 """
 
-import os, json, hashlib, html, logging
+import os, json, html, logging
 from datetime import datetime, date, timedelta, timezone
 import requests
 import anthropic
@@ -15,6 +15,8 @@ import regole
 import storico
 import indicatori_storici
 import segnali_medio_periodo
+import calendario as cal
+import cifra_pagina
 import analisi_ui
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -405,67 +407,6 @@ def _passes_etp(r, min_price=1.0):
         return False
     return True
 
-def etp_score(r):
-    """Punteggio TECNICO (breve termine): trend + momentum + salute RSI, con freno ai blow-off."""
-    price  = r.get("price")     or 0
-    ema50  = r.get("ema50")     or 0
-    ema200 = r.get("ema200")    or 0
-    rsi    = r.get("rsi")       or 50
-    hist   = r.get("macd_hist") or 0
-    p1m    = r.get("perf_1m")   or 0
-    p3m    = r.get("perf_3m")   or 0
-
-    s = 0.0
-    # Struttura di trend
-    if ema200 and price > ema200:            s += 2.0
-    if ema50  and price > ema50:             s += 1.0
-    if ema50 and ema200 and ema50 > ema200:  s += 1.0   # golden alignment
-    # Momentum con rendimenti decrescenti (radice): non premia gli strappi estremi
-    s += (p3m ** 0.5 if p3m > 0 else 0) * 0.6
-    s += (p1m ** 0.5 if p1m > 0 else -abs(p1m) * 0.1)
-    # Conferma MACD
-    if hist > 0:
-        s += 1.0
-    # Salute RSI: premia 50-68, penalizza gli estremi
-    if   50 <= rsi <= 68: s += 1.0
-    elif 45 <= rsi < 50:  s += 0.3
-    elif rsi > 78:        s -= 1.0
-    elif rsi < 40:        s -= 0.5
-    return s
-
-def etp_cost_score(r):
-    """Punteggio COSTO/DIMENSIONE (strutturale): premia TER basso e masse ampie.
-
-    NEUTRO sui dati mancanti: la diagnostica ha mostrato che TradingView
-    valorizza expense_ratio ma spesso lascia aum a None, e Yahoo quoteSummary
-    ora risponde 401. Penalizzare un dato assente equivarrebbe a punire un ETF
-    solo perche' l'API non lo espone, quindi in quel caso non si assegna nulla.
-
-    NOTA sul formato: TradingView puo' esporre expense_ratio come percentuale
-    (0.20 = 0,20%) o come frazione (0.002). L'euristica sotto e' difensiva:
-    verifica il valore reale nei log e, se il formato e' stabile, semplificala."""
-    ter = r.get("expense_ratio")
-    aum = r.get("aum")
-    s = 0.0
-    if ter is not None:
-        ter_pct = ter * 100 if ter < 0.05 else ter    # euristica: <0.05 ⇒ frazione
-        if   ter_pct <= 0.15: s += 2.0
-        elif ter_pct <= 0.30: s += 1.5
-        elif ter_pct <= 0.50: s += 1.0
-        elif ter_pct <= 0.75: s += 0.3
-        else:                 s -= 1.0    # >0,75%: tipico dei prodotti a leva
-    if aum:                               # None o 0 ⇒ nessun punteggio, non penalita'
-        if   aum >= 500_000_000: s += 2.0
-        elif aum >= 100_000_000: s += 1.5
-        elif aum >=  20_000_000: s += 1.0
-        elif aum >=   5_000_000: s += 0.3
-        else:                    s -= 0.5  # davvero piccolo ⇒ spread ampio, rischio chiusura
-    return s
-
-def etp_total_score(r):
-    """Convenienza complessiva = tecnica (breve) + costo/dimensione (strutturale)."""
-    return etp_score(r) + etp_cost_score(r)
-
 # ── Universo ETP: lista esplicita di ticker quotati su Borsa Italiana ──
 # La diagnostica ha dimostrato che il mercato "italy" dello screener TradingView
 # contiene SOLO azioni (1818 strumenti, tutti type=stock) piu' 7 fondi chiusi:
@@ -579,10 +520,13 @@ def screen_etfs():
 
     if after_etp and not eligible:
         logger.warning("ETP: nessuno supera _passes_etp (liquidita'/trend). "
-                       "Mostro comunque i migliori per punteggio, senza cancello.")
+                       "Mostro comunque i migliori per performance 3M, senza cancello.")
         eligible = after_etp
 
-    eligible.sort(key=etp_total_score, reverse=True)
+    # Ordinamento dichiarato nella pagina: performance a 3 mesi, una colonna
+    # mostrata in tabella — non un punteggio composito invisibile.
+    eligible.sort(key=lambda r: r.get("perf_3m") if r.get("perf_3m") is not None else float("-inf"),
+                  reverse=True)
     logger.info(f"ETP: {len(eligible)} eleggibili → top {min(10, len(eligible))}")
     return eligible[:10]
 
@@ -782,6 +726,114 @@ def _tv_fetch_symbols(syms):
         logger.warning(f"TV fetch batch: {e}")
     return results
 
+# Campi di livello di prezzo restituiti da parse_tv_row: vanno convertiti tutti
+# insieme, altrimenti il prezzo convertito verrebbe confrontato con EMA e
+# massimi/minimi ancora nella valuta di origine. RSI e performance % no: sono
+# rapporti, non cambiano con la valuta.
+_CAMPI_PREZZO = ("price", "ema20", "ema50", "ema200", "day_high", "day_low",
+                 "high_3m", "low_3m", "high_52w", "low_52w", "macd", "macd_sig", "macd_hist")
+
+
+def _tv_fetch_valute(syms):
+    """{simbolo: valuta del prezzo restituito da TradingView}. Richiesta a parte
+    rispetto a TV_COLS: se la colonna non fosse valida romperebbe solo questa,
+    non lo screener. {} in caso di errore (valuta non verificabile)."""
+    out = {}
+    if not syms:
+        return out
+    try:
+        data = tv_request("https://scanner.tradingview.com/global/scan",
+                          {"symbols": {"tickers": list(syms)}, "columns": ["currency"]})
+        for row in (data.get("data") or []):
+            ccy = ((row.get("d") or [None])[0] or "").upper()
+            if ccy:
+                out[row.get("s", "")] = ccy
+    except Exception as e:
+        logger.warning(f"TV valute: {e}")
+    return out
+
+
+def _tv_fetch_cambi(coppie):
+    """{(da, a): unita' di `a` per 1 `da`} dall'ultima quotazione FX_IDC su
+    TradingView, cioe' lo stesso momento del prezzo letto dallo screener.
+    Se manca la coppia diretta si usa l'inversa. Coppie non trovate assenti."""
+    coppie = {(da, a) for da, a in coppie if da and a and da != a}
+    if not coppie:
+        return {}
+    tickers = []
+    for da, a in coppie:
+        tickers += [f"FX_IDC:{da}{a}", f"FX_IDC:{a}{da}"]
+    quotazioni = {}
+    try:
+        data = tv_request("https://scanner.tradingview.com/global/scan",
+                          {"symbols": {"tickers": tickers}, "columns": ["close"]})
+        for row in (data.get("data") or []):
+            c = (row.get("d") or [None])[0]
+            if c:
+                quotazioni[row.get("s", "")] = c
+    except Exception as e:
+        logger.warning(f"TV cambi: {e}")
+    out = {}
+    for da, a in coppie:
+        if quotazioni.get(f"FX_IDC:{da}{a}"):
+            out[(da, a)] = (quotazioni[f"FX_IDC:{da}{a}"], f"FX_IDC:{da}{a}")
+        elif quotazioni.get(f"FX_IDC:{a}{da}"):
+            out[(da, a)] = (1 / quotazioni[f"FX_IDC:{a}{da}"], f"1/FX_IDC:{a}{da}")
+    return out
+
+
+def allinea_valuta(p, valuta_dato, cambi):
+    """Porta i campi di prezzo di una posizione nella valuta del carico (`divisa`
+    del dossier) prima di qualsiasi confronto col prezzo medio, stop o target.
+    Imposta sempre p['valuta_stato']:
+    - 'ok': il dato e' gia' nella valuta del carico;
+    - 'convertita': convertito, con valuta/prezzo di origine e cambio usato;
+    - 'cambio_mancante': valute diverse e cambio non disponibile — i campi di
+      prezzo vengono azzerati, perche' un numero nella valuta sbagliata
+      etichettato come quella giusta e' peggio di nessun numero;
+    - 'non_verificata': TradingView non ha detto in che valuta e' il dato."""
+    divisa = (p.get("divisa") or "").upper()
+    if not p.get("price"):
+        p["valuta_stato"] = "ok"
+        return p
+    if not valuta_dato or not divisa:
+        p["valuta_stato"] = "non_verificata"
+        p["valuta_prezzo"] = valuta_dato or divisa or ""
+        return p
+    p["valuta_prezzo"] = divisa
+    if valuta_dato == divisa:
+        p["valuta_stato"] = "ok"
+        return p
+    p["valuta_origine"] = valuta_dato
+    p["prezzo_origine"] = p["price"]
+    cambio = cambi.get((valuta_dato, divisa))
+    if not cambio:
+        p["valuta_stato"] = "cambio_mancante"
+        for campo in _CAMPI_PREZZO:
+            p[campo] = None
+        return p
+    fattore, simbolo_fx = cambio
+    for campo in _CAMPI_PREZZO:
+        if p.get(campo) is not None:
+            p[campo] = p[campo] * fattore
+    p["price"] = round(p["price"], 4)
+    p["valuta_stato"] = "convertita"
+    p["cambio"] = fattore
+    p["cambio_simbolo"] = simbolo_fx
+    return p
+
+
+def motivo_simbolo_non_risolto(sym):
+    """Perche' un ticker configurato non ha dati: da mostrare nella riga,
+    invece di lasciare una serie di n.d. senza spiegazione."""
+    if not sym:
+        return "nessun ticker TradingView indicato: inseriscilo qui sotto"
+    if ":" not in sym:
+        return (f"«{sym}» non e' nel formato TradingView BORSA:TICKER (es. NASDAQ:SNY, MIL:ISP): "
+                "correggilo qui sotto e salva")
+    return f"«{sym}» non trovato su TradingView: controlla borsa e ticker"
+
+
 def get_portfolio_data():
     """Recupera dati tecnici del portafoglio via TradingView screener.
     Accetta 'EXCHANGE:TICKER' oppure solo 'TICKER'.
@@ -825,7 +877,7 @@ def get_portfolio_data():
             # Niente ticker reali nel log: e' un repo pubblico, il log lo e' con lui.
             logger.warning("Portfolio: dati non trovati per una posizione")
             parsed = {
-                "symbol": ticker, "yf_symbol": sym,
+                "symbol": ticker, "yf_symbol": sym, "simbolo_errore": motivo_simbolo_non_risolto(sym),
                 "name": item.get("name", sym), "type": item.get("type", "Azione"),
                 "price": None, "rsi": None, "trend": "n.d.",
                 "macd_str": "n.d.", "macd_hist": 0,
@@ -835,13 +887,35 @@ def get_portfolio_data():
             }
         # Campi ricostruiti dal dossier XLS (portfolio_sync): assenti se il
         # portafoglio arriva ancora dal vecchio secret PORTFOLIO_JSON.
+        parsed["ticker_confermato"] = item.get("ticker_confermato", True)
         parsed["isin"]              = item.get("isin")
+        parsed["titolo"]            = item.get("titolo")
         parsed["quantita"]          = item.get("quantita")
         parsed["prezzo_medio"]      = item.get("prezzo_medio")
         parsed["divisa"]            = item.get("divisa")
         parsed["data_apertura"]     = item.get("data_apertura")
         parsed["giorni_detenzione"] = item.get("giorni_detenzione")
+        parsed["tranche"]           = item.get("tranche")
+        parsed["data_apertura_motivo"] = item.get("data_apertura_motivo")
+        parsed["data_apertura_fonte"] = "movimenti" if item.get("data_apertura") else None
         out.append(parsed)
+
+    # Valuta del dato TradingView vs valuta del carico: un ETF UCITS
+    # denominato in USD e quotato in EUR a Milano puo' arrivare dallo screener
+    # in USD, e confrontarlo col carico in EUR da' una variazione falsa.
+    con_prezzo = [p for p in out if p.get("price")]
+    valute = _tv_fetch_valute({p["tv_symbol"] for p in con_prezzo if p.get("tv_symbol")})
+    valuta_di = {id(p): valute.get(p.get("tv_symbol", "")) for p in con_prezzo}
+    cambi = _tv_fetch_cambi({(valuta_di[id(p)], (p.get("divisa") or "").upper()) for p in con_prezzo})
+    for p in con_prezzo:
+        allinea_valuta(p, valuta_di[id(p)], cambi)
+    stati = [p.get("valuta_stato") for p in con_prezzo]
+    # Solo conteggi nel log: e' un repo pubblico.
+    logger.info(
+        f"Valuta prezzi portafoglio: {stati.count('ok')} gia' nella valuta del carico, "
+        f"{stati.count('convertita')} convertite, {stati.count('cambio_mancante')} senza cambio, "
+        f"{stati.count('non_verificata')} non verificate"
+    )
     return out
 
 def get_watchlist_data(watchlist):
@@ -864,50 +938,44 @@ def get_watchlist_data(watchlist):
     return out
 
 # ─── INDICI DI MERCATO ────────────────────────────────────────────────────────
-# Simboli TradingView per gli indici principali
+# Simboli TradingView per gli indici principali, in ordine di preferenza: vince
+# il primo che lo screener restituisce. "NASDAQ:COMP" da solo restituiva
+# sempre n.d.; il Composite su TradingView e' IXIC.
 INDICES_TV = {
-    "S&P 500":      "SP:SPX",
-    "NASDAQ":       "NASDAQ:COMP",
-    "Eurostoxx 50": "TVC:SX5E",
-    "FTSE MIB":     "INDEX:FTSEMIB",
+    "S&P 500":      ["SP:SPX"],
+    "NASDAQ":       ["NASDAQ:IXIC", "TVC:IXIC", "NASDAQ:COMP"],
+    "Eurostoxx 50": ["TVC:SX5E"],
+    "FTSE MIB":     ["INDEX:FTSEMIB"],
 }
+
+
+def indici_da_risposta(righe):
+    """{nome indice: variazione %} dalle righe dello screener, scegliendo per
+    ogni indice il primo simbolo candidato presente. None se nessuno."""
+    per_simbolo = {}
+    for row in righe or []:
+        chg = (row.get("d") or [None])[0]
+        if chg is not None:
+            per_simbolo[row.get("s", "")] = round(chg, 2)
+    return {nome: next((per_simbolo[c] for c in candidati if c in per_simbolo), None)
+            for nome, candidati in INDICES_TV.items()}
+
 
 def get_indices():
     """Recupera variazione % degli indici via TradingView screener (nessuna dipendenza da Yahoo)."""
-    out = {name: None for name in INDICES_TV}
     try:
-        syms = list(INDICES_TV.values())
+        syms = [c for candidati in INDICES_TV.values() for c in candidati]
         data = tv_request("https://scanner.tradingview.com/global/scan",
                           {"symbols": {"tickers": syms}, "columns": ["change"]})
-        by_tv = {v: k for k, v in INDICES_TV.items()}
-        for row in (data.get("data") or []):
-            s   = row.get("s", "")
-            chg = (row.get("d") or [None])[0]
-            name = by_tv.get(s)
-            if name and chg is not None:
-                out[name] = round(chg, 2)
+        out = indici_da_risposta(data.get("data"))
     except Exception as e:
         logger.warning(f"Indices TV fetch: {e}")
+        out = {name: None for name in INDICES_TV}
+    mancanti = [k for k, v in out.items() if v is None]
+    if mancanti:
+        # Nomi degli indici, non dati personali: si possono loggare.
+        logger.warning(f"Indici senza dato da TradingView: {', '.join(mancanti)}")
     return out
-
-# ─── CALENDARIO (Sezione 2) ───────────────────────────────────────────────────
-def build_calendario(portfolio, regole_map, eventi_macro, giorni=60):
-    """Unisce le riunioni BCE/Fed e gli eventi per-titolo scritti a mano nelle
-    regole delle posizioni aperte, filtrati sui prossimi N giorni e ordinati
-    cronologicamente. Non include eventi per titoli fuori portafoglio: la
-    watchlist configurabile arriva in Fase 5."""
-    oggi = date.today()
-    limite = oggi + timedelta(days=giorni)
-    voci = [e for e in eventi_macro if oggi <= e["data"] <= limite]
-    for p in portfolio:
-        isin = p.get("isin")
-        nome = p.get("name", isin)
-        regola = regole_map.get(isin) or {}
-        for ev in regola.get("eventi", []):
-            if oggi <= ev["data"] <= limite:
-                voci.append({"data": ev["data"], "titolo": nome, "tipo": ev.get("tipo", "evento")})
-    voci.sort(key=lambda v: v["data"])
-    return voci
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
 
@@ -920,7 +988,15 @@ def _confronto_ieri(p):
     if not prev:
         return "nessun dato di ieri (prima rilevazione per questa posizione)"
     parti = []
-    if prev.get("close") and p.get("price"):
+    valuta_ieri = prev.get("valuta") or ""
+    valuta_oggi = p.get("valuta_prezzo") or ""
+    # Ieri registrato senza conversione (riga senza valuta annotata) o in
+    # un'altra valuta: la differenza sarebbe il cambio, non il mercato.
+    valute_diverse = (valuta_ieri != valuta_oggi) if valuta_ieri else p.get("valuta_stato") == "convertita"
+    if prev.get("close") and p.get("price") and valute_diverse:
+        parti.append(f"prezzo di ieri registrato in un'altra valuta ({valuta_ieri or 'senza conversione'}), "
+                     f"oggi in {valuta_oggi}: confronto di prezzo non significativo")
+    elif prev.get("close") and p.get("price"):
         var = (p["price"] / prev["close"] - 1) * 100
         parti.append(f"prezzo da {prev['close']:.2f} a {p['price']:.2f} ({var:+.1f}%)")
     if prev.get("rsi") is not None and p.get("rsi") is not None:
@@ -1038,27 +1114,12 @@ def pct(val):
     color = "#16a34a" if val >= 0 else "#dc2626"
     return f'<span style="color:{color};font-weight:600">{val:+.1f}%</span>'
 
-def rating_badge(r):
-    color = "#16a34a" if r == "Forte" else "#d97706"
-    return f'<span style="color:{color};font-weight:700">● {r}</span>'
-
-def etp_reco_badge(score):
-    """Badge per la Rec. degli ETP, coerente con l'ordinamento (etp_total_score).
-    Soglie da calibrare sui dati reali dell'imbuto."""
-    if score >= 8.0:
-        return '<span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span>'
-    elif score >= 5.0:
-        return '<span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span>'
-    elif score >= 2.5:
-        return '<span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span>'
-    else:
-        return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Debole</span>'
-
 def fmt_ter(ter):
     """Formatta il TER (Total Expense Ratio) con colore per fascia di costo."""
     if ter is None:
         return '<span style="color:#999">n.d.</span>'
-    ter_pct = ter * 100 if ter < 0.05 else ter    # stessa euristica di etp_cost_score
+    # TradingView espone il TER come percentuale (0.20) o come frazione (0.002)
+    ter_pct = ter * 100 if ter < 0.05 else ter
     color = "#16a34a" if ter_pct <= 0.30 else ("#d97706" if ter_pct <= 0.75 else "#dc2626")
     return f'<span style="color:{color};font-size:12px">{ter_pct:.2f}%</span>'
 
@@ -1203,7 +1264,8 @@ def detect_pattern(r):
 
 def idx_badge(val):
     if val is None:
-        return '<span style="color:#999">n.d.</span>'
+        return ('<span style="color:#999" title="TradingView non ha restituito la variazione di oggi per '
+                'questo indice">n.d.</span><div style="color:#999;font-size:11px">non restituito da TradingView</div>')
     color = "#16a34a" if val >= 0 else "#dc2626"
     sign = "+" if val >= 0 else ""
     return f'<span style="color:{color};font-weight:700">{sign}{val:.2f}%</span>'
@@ -1224,15 +1286,6 @@ def macd_badge(macd_str):
         return '<span style="color:#999">n.d.</span>'
     color = "#16a34a" if macd_str.startswith("↑") else "#dc2626"
     return f'<span style="color:{color};font-size:12px;font-weight:600;white-space:nowrap">{macd_str}</span>'
-
-def rec_badge(rec_str):
-    """Badge TV Rec.All (aggregato 26 indicatori)."""
-    colors = {
-        "Compra Forte": "#15803d", "Compra": "#16a34a",
-        "Neutro": "#888", "Vendi": "#dc2626", "Vendi Forte": "#991b1b",
-    }
-    c = colors.get(rec_str, "#888")
-    return f'<span style="color:{c};font-size:12px;font-weight:700">● {rec_str}</span>'
 
 def trend_rimbalzo_badge(label):
     """Badge di classificazione (non un giudizio d'acquisto): distingue un trend
@@ -1271,7 +1324,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
 
 def etf_rows(lst, analysis_map, market_delta=0):
     if not lst:
-        return '<tr><td colspan="18" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="17" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -1291,30 +1344,96 @@ def etf_rows(lst, analysis_map, market_delta=0):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td>{etp_reco_badge(etp_total_score(d))}</td>
             <td>{fmt_ter(d.get('expense_ratio'))}</td>
             <td>{fmt_aum(d.get('aum'))}</td>
             <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
         </tr>"""
     return rows
 
-def var_da_carico_html(price, prezzo_medio):
+_NOTA = '<br><span style="color:#999;font-size:11px">{}</span>'
+
+
+def prezzo_html(p):
+    """Prezzo con la valuta effettivamente usata e, se c'e' stata, la
+    conversione — cosi' un errore di valuta resta visibile se si ripresenta."""
+    stato = p.get("valuta_stato")
+    divisa = (p.get("divisa") or "").upper()
+    price = p.get("price")
+    if stato == "cambio_mancante":
+        return ('<span style="color:#999">n.d.</span>'
+                + _NOTA.format(f"dato in {p['valuta_origine']}, carico in {divisa}: cambio non disponibile"))
+    if p.get("simbolo_errore"):
+        return '<span style="color:#999">n.d.</span>' + _NOTA.format("ticker non valido, vedi a sinistra")
+    if not price:
+        return '<span style="color:#999">n.d.</span>'
+    if stato == "convertita":
+        return (f"{price:.2f} {divisa}"
+                + _NOTA.format(f"da {p['prezzo_origine']:.2f} {p['valuta_origine']} × "
+                               f"{p['cambio']:.4f} ({html.escape(p['cambio_simbolo'])})"))
+    if stato == "non_verificata":
+        return (f"{price:.2f} {html.escape(p.get('valuta_prezzo') or '')}"
+                + _NOTA.format("⚠ valuta del dato non verificata"))
+    return f"{price:.2f} {p.get('valuta_prezzo') or divisa}"
+
+
+def stato_ticker_html(p):
+    """Errore del ticker in evidenza, o avviso se e' solo un suggerimento."""
+    if p.get("simbolo_errore"):
+        return f'<br><span style="color:#dc2626;font-size:11px;font-weight:600">⚠ {html.escape(p["simbolo_errore"])}</span>'
+    if p.get("ticker_confermato") is False:
+        return _NOTA.format("ticker suggerito dal simbolo del broker, non ancora confermato: verificalo e salva")
+    return ""
+
+
+def var_da_carico_html(price, prezzo_medio, valuta_stato=None):
     if not price or not prezzo_medio:
         return '<span style="color:#999">n.d.</span>'
     var = (price / prezzo_medio - 1) * 100
     color = "#16a34a" if var >= 0 else "#dc2626"
-    return f'<span style="color:{color};font-weight:700">{var:+.1f}%</span>'
+    out = f'<span style="color:{color};font-weight:700">{var:+.1f}%</span>'
+    if valuta_stato == "non_verificata":
+        out += _NOTA.format("⚠ valuta del prezzo non verificata rispetto al carico")
+    return out
 
-def giorni_detenzione_html(giorni):
+def applica_data_manuale(portfolio, regole_map, oggi=None):
+    """Data di apertura inserita a mano nella pagina: ripiego per le posizioni
+    di cui lo storico movimenti non ricava la data (mai al posto di una
+    ricavata dai movimenti, che resta la fonte primaria)."""
+    oggi = oggi or date.today()
+    for p in portfolio:
+        if p.get("giorni_detenzione") is not None:
+            continue
+        manuale = (regole_map.get(p.get("isin")) or {}).get("data_apertura")
+        if manuale:
+            p["data_apertura"] = manuale.isoformat()
+            p["giorni_detenzione"] = max(0, (oggi - manuale).days)
+            p["data_apertura_fonte"] = "manuale"
+    return portfolio
+
+
+def giorni_detenzione_html(giorni, data_apertura=None, tranche=None, fonte=None, motivo=None):
     if giorni is None:
-        return '<span style="color:#999">n.d.</span>'
+        out = '<span style="color:#999">n.d.</span>'
+        if motivo:
+            out += _NOTA.format(html.escape(motivo) + " — oppure inserisci la data qui sotto")
+        return out
     if giorni < 60:
         color = "#16a34a"
     elif giorni <= 80:
         color = "#d97706"
     else:
         color = "#dc2626"
-    return f'<span style="color:{color};font-weight:700">{giorni} gg</span>'
+    out = f'<span style="color:{color};font-weight:700">{giorni} gg</span>'
+    dettagli = []
+    if data_apertura:
+        dettagli.append("dal " + date.fromisoformat(data_apertura).strftime("%d/%m/%Y"))
+    if tranche and tranche > 1:
+        dettagli.append(f"{tranche} tranche")
+    if fonte == "manuale":
+        dettagli.append("data inserita a mano")
+    if dettagli:
+        out += _NOTA.format(" · ".join(dettagli))
+    return out
 
 def distanza_da_livello_html(price, livello, verso_alto):
     """verso_alto=True per il target (quanto manca, in %, perche' il prezzo
@@ -1337,18 +1456,34 @@ def trend_ema_html(sopra, giorni, certo, label):
         durata = f" ({giorni}gg)" if certo else f" (almeno {giorni}gg)"
     return f'<span style="color:{color};font-weight:600;white-space:nowrap">{freccia} {stato} {label}{durata}</span>'
 
-def eventi_prossimi_html(eventi, giorni_max=30):
-    oggi = date.today()
-    prossimi = sorted(
-        (e for e in (eventi or []) if 0 <= (e["data"] - oggi).days <= giorni_max),
-        key=lambda e: e["data"]
-    )
+def effetto_evento_html(v):
+    """Per gli stacchi: importo ed effetto meccanico atteso sul prezzo, o il
+    motivo per cui non e' calcolabile. Vuoto per gli altri eventi."""
+    if v.get("tipo") != cal.STACCO:
+        return ""
+    if not v.get("importo"):
+        return "importo n.d.: aggiungilo nella riga della posizione per vedere l'effetto sul prezzo"
+    testo = f"−{v['importo']:g} {v.get('valuta') or ''} per azione".replace("  ", " ")
+    if v.get("effetto_pct") is not None:
+        testo += f" ({v['effetto_pct']:.1f}% sul prezzo attuale): calo meccanico, non un segnale di mercato"
+    return testo
+
+
+def eventi_prossimi_html(voci, giorni_max=30, oggi=None):
+    """Colonna "Eventi (30gg)": le voci del calendario di questa posizione."""
+    oggi = oggi or date.today()
+    prossimi = [v for v in (voci or []) if 0 <= (v["data"] - oggi).days <= giorni_max]
     if not prossimi:
         return '<span style="color:#999;font-size:12px">nessuno nei prossimi 30gg</span>'
-    return "<br>".join(
-        f'<span style="font-size:12px">{e["tipo"]} — {e["data"].strftime("%d/%m")}</span>'
-        for e in prossimi
-    )
+    righe = []
+    for v in prossimi:
+        riga = f'<span style="font-size:12px">{html.escape(v["tipo"])} — {v["data"].strftime("%d/%m")}</span>'
+        effetto = effetto_evento_html(v)
+        if effetto:
+            colore = "#b45309" if v.get("importo") else "#999"
+            riga += f'<br><span style="font-size:11px;color:{colore}">{html.escape(effetto)}</span>'
+        righe.append(riga)
+    return "<br>".join(righe)
 
 def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
     """Domande/osservazioni fattuali, non giudizi: confronta lo stato attuale
@@ -1387,7 +1522,9 @@ def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
         return '<span style="color:#999;font-size:12px">—</span>'
     return "<br>".join(righe)
 
-def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None, editor_idx_by_isin=None):
+def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None, editor_idx_by_isin=None,
+                   calendario=None):
+    calendario = calendario or []
     cambiamenti_map = cambiamenti_map or {}
     contraddizioni_map = contraddizioni_map or {}
     editor_idx_by_isin = editor_idx_by_isin or {}
@@ -1431,9 +1568,7 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
                 ) if isin else (None, False)
             else:
                 g200, certo200 = None, False
-        price_str = f"{price:.2f}" if price else "n.d."
-        divisa = p.get("divisa") or ""
-        tesi = regola.get("tesi") or ""
+        tesi =regola.get("tesi") or ""
         nome = p.get("name", p.get("symbol", ""))
         simbolo = p.get("yf_symbol", p.get("symbol", ""))
         revisione = regola.get("revisione")
@@ -1452,22 +1587,36 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
                             f'style="width:80px;{mini}">')
             rev_input = (f'<br><input id="rev-{idx}" type="date" title="Data in cui vuoi rivedere la tesi (facoltativo)" '
                         f'value="{revisione.isoformat() if revisione else ""}" style="{mini}">')
+            opzioni = "".join(f'<option>{html.escape(t)}</option>' for t in cal.TIPI)
+            eventi_input = (
+                f'<div style="margin-top:6px;font-size:11px;color:#666">Eventi inseriti a mano:</div>'
+                f'<div id="ev-lista-{idx}" style="font-size:11px"></div>'
+                f'<select id="ev-tipo-{idx}" style="{mini};width:150px">{opzioni}</select>'
+                f'<br><input id="ev-data-{idx}" type="date" style="{mini}">'
+                f'<input id="ev-imp-{idx}" type="number" step="0.0001" min="0" placeholder="importo (stacchi)" '
+                f'style="width:110px;{mini}">'
+                f'<button type="button" onclick="aggiungiEvento({idx})" style="{mini};cursor:pointer">+ aggiungi</button>')
+            apertura_manuale = regola.get("data_apertura")
+            apertura_input = (f'<br><input id="apertura-{idx}" type="date" '
+                              f'title="Data del primo acquisto ancora in essere: usata solo se lo storico movimenti non la ricava" '
+                              f'value="{apertura_manuale.isoformat() if apertura_manuale else ""}" style="{mini}">')
             tesi_field = (f'<input id="tesi-{idx}" value="{html.escape(tesi)}" '
                          f'placeholder="perché tieni questa posizione" style="width:100%;{mini}">')
         else:
-            ticker_input = stop_input = target_input = rev_input = ""
+            ticker_input = stop_input = target_input = rev_input = apertura_input = eventi_input = ""
             tesi_html = html.escape(tesi) if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
             tesi_field = f'<div style="color:#444;font-size:12px">{tesi_html}</div>'
 
         rows += f"""<tr>
-            <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{ticker_input}</td>
-            <td>{price_str} {divisa}</td>
-            <td>{var_da_carico_html(price, p.get('prezzo_medio'))}</td>
-            <td>{giorni_detenzione_html(p.get('giorni_detenzione'))}</td>
+            <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{stato_ticker_html(p)}{ticker_input}</td>
+            <td>{prezzo_html(p)}</td>
+            <td>{var_da_carico_html(price, p.get('prezzo_medio'), p.get('valuta_stato'))}</td>
+            <td>{giorni_detenzione_html(p.get('giorni_detenzione'), p.get('data_apertura'), p.get('tranche'),
+                                        p.get('data_apertura_fonte'), p.get('data_apertura_motivo'))}{apertura_input}</td>
             <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}{stop_input}</td>
             <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}{target_input}</td>
             <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
-            <td>{eventi_prossimi_html(regola.get('eventi'))}{rev_input}</td>
+            <td>{eventi_prossimi_html([v for v in calendario if v.get("isin") == isin])}{eventi_input}{rev_input}</td>
             <td>{note_fattuali_html(p, regola, cambiamento, contraddizione)}</td>
             <td class="wrap">{tesi_field}</td>
         </tr>"""
@@ -1475,13 +1624,16 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
 
 def calendario_rows(voci):
     if not voci:
-        return '<tr><td colspan="3" style="text-align:center;color:#999;padding:20px">Nessun evento nei prossimi 60 giorni.</td></tr>'
+        return '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px">Nessun evento nei prossimi 60 giorni.</td></tr>'
     rows = ""
     for v in voci:
+        dettaglio = " — ".join(x for x in (effetto_evento_html(v), v.get("nota") or "") if x)
         rows += f"""<tr>
             <td style="white-space:nowrap">{v['data'].strftime('%d/%m/%Y')}</td>
-            <td>{v['tipo']}</td>
-            <td>{v['titolo']}</td>
+            <td>{html.escape(v['tipo'])}</td>
+            <td>{html.escape(v['titolo'] or '')}</td>
+            <td class="wrap" style="font-size:12px">{html.escape(dettaglio)}</td>
+            <td style="font-size:11px;color:#999">{html.escape(v.get('fonte') or '')}</td>
         </tr>"""
     return rows
 
@@ -1503,7 +1655,8 @@ def _segnale_badge(tipo):
 def _formatta_dettaglio_segnale(s):
     tipo = s.get("tipo", "")
     if tipo in ("Doppio massimo", "Doppio minimo"):
-        return (f"Picchi del {s['data_picco1'].strftime('%d/%m/%Y')} e {s['data_picco2'].strftime('%d/%m/%Y')}, "
+        estremi = "Massimi" if tipo == "Doppio massimo" else "Minimi"
+        return (f"{estremi} del {s['data_primo'].strftime('%d/%m/%Y')} e {s['data_secondo'].strftime('%d/%m/%Y')}, "
                 f"distanza {s['distanza_pct']}%. Livello di conferma: {s['livello_conferma']}.")
     if "Divergenza" in tipo:
         return (f"{s['prezzo'].capitalize()} tra il {s['data_primo'].strftime('%d/%m/%Y')} "
@@ -1511,8 +1664,7 @@ def _formatta_dettaglio_segnale(s):
     if "Rottura" in tipo:
         return f"Il {s['data'].strftime('%d/%m/%Y')}, livello precedente {s['livello_precedente']}."
     if tipo in ("Golden cross", "Death cross"):
-        durata = f"{s['giorni_da_incrocio']}gg" if s["certo"] else f"almeno {s['giorni_da_incrocio']}gg"
-        return f"EMA50/200 su candele settimanali, da {durata}."
+        return f"EMA50/200 su candele settimanali, incrocio {s['giorni_da_incrocio']} giorni fa."
     if tipo == "Volume anomalo":
         return f"Il {s['data'].strftime('%d/%m/%Y')}, {s['rapporto']}x la media a 50 giorni."
     return ""
@@ -1548,10 +1700,15 @@ def _analysis_map(items):
             m.setdefault(bare.split(":")[-1], a)
     return m
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="",
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password="",
                regole_map=None, calendario=None, segnali_items=None, regole_editor_data=None):
     regole_map = regole_map or {}
-    regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False)
+    # "</" spezzato: un testo scritto dall'utente (tesi, note) non deve poter
+    # chiudere il tag <script> in cui questo JSON viene inserito.
+    regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False).replace("</", "<\\/")
+    # Con la password le regole (posizioni) viaggiano solo dentro il blob
+    # cifrato insieme al resto del report: nel sorgente resta una lista vuota.
+    regole_js = "[]" if password else regole_editor_json
     calendario = calendario or []
     segnali_items = segnali_items or []
     # Il run schedulato parte a mercati USA chiusi (22:30 italiane): la
@@ -1597,38 +1754,62 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <p id="err" style="color:#dc2626;font-size:13px;margin-top:12px;display:none">Password errata</p>
   </div>
 </div>
-""" if password_hash else ""
+""" if password else ""
 
     lock_script = f"""
 <script>
-  const HASH = "{password_hash}";
-  const REGOLE_ATTUALI = {regole_editor_json};
+  let REGOLE_ATTUALI = {regole_js};
 
-  // ─── Autenticazione ───────────────────────────────────────────────────────
-  async function sha256(msg) {{
-    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  // ─── Accesso: il contenuto e' cifrato, la password serve a decifrarlo ─────
+  // AES-256-GCM, chiave PBKDF2-SHA256 dalla password (vedi cifra_pagina.py).
+  // Nessun hash della password nella pagina: una password sbagliata fa
+  // semplicemente fallire la decifratura.
+  function daB64(s) {{ return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }}
+  function aB64(buf) {{ return btoa(String.fromCharCode(...new Uint8Array(buf))); }}
+
+  async function chiaveDaPassword(pwd) {{
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pwd), "PBKDF2", false, ["deriveBits"]);
+    return crypto.subtle.deriveBits({{name: "PBKDF2", hash: "SHA-256", salt: daB64(CIFRATO.salt),
+                                      iterations: CIFRATO.iter}}, base, 256);
   }}
+
+  async function decifraReport(chiaveRaw) {{
+    const key = await crypto.subtle.importKey("raw", chiaveRaw, "AES-GCM", false, ["decrypt"]);
+    const pt = await crypto.subtle.decrypt({{name: "AES-GCM", iv: daB64(CIFRATO.iv)}}, key, daB64(CIFRATO.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }}
+
+  function mostraReport(dati) {{
+    const rep = document.getElementById("report");
+    rep.innerHTML = dati.html;
+    // Gli <script> inseriti con innerHTML non vengono eseguiti: li si ricrea.
+    rep.querySelectorAll("script").forEach(vecchio => {{
+      const nuovo = document.createElement("script");
+      nuovo.textContent = vecchio.textContent;
+      vecchio.replaceWith(nuovo);
+    }});
+    REGOLE_ATTUALI = dati.regole || [];
+    const lock = document.getElementById("lock");
+    if (lock) lock.style.display = "none";
+    rep.style.display = "block";
+    inizializzaReport();
+  }}
+
   async function unlock() {{
-    const h = await sha256(document.getElementById("pwd").value);
-    if (h === HASH) {{
-      document.getElementById("lock").style.display = "none";
-      document.getElementById("report").style.display = "block";
-      localStorage.setItem("tr_auth", h);
-      localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
-    }} else {{
-      document.getElementById("err").style.display = "block";
+    const err = document.getElementById("err");
+    err.style.display = "none";
+    try {{
+      const chiave = await chiaveDaPassword(document.getElementById("pwd").value);
+      const dati = await decifraReport(chiave);
+      try {{
+        localStorage.setItem("tr_key", aB64(chiave));
+        localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
+      }} catch (e) {{}}
+      mostraReport(dati);
+    }} catch (e) {{
+      err.style.display = "block";
     }}
   }}
-  document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
-  (async () => {{
-    const h = localStorage.getItem("tr_auth");
-    const exp = localStorage.getItem("tr_exp");
-    if (h && exp && Date.now() < +exp && h === HASH) {{
-      document.getElementById("lock").style.display = "none";
-      document.getElementById("report").style.display = "block";
-    }}
-  }})();
 
   function showGhConfig() {{
     document.getElementById("gh-config").style.display = "block";
@@ -1640,11 +1821,17 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     document.getElementById("gh-config-saved").style.display = "block";
   }}
 
-  // Se le credenziali sono già salvate da una visita precedente, non
-  // mostrare di nuovo il modulo vuoto: sembrerebbe chiedere di nuovo il
-  // token anche quando non serve (dispatchWorkflow legge comunque da qui).
-  if (localStorage.getItem("gh_owner") && localStorage.getItem("gh_repo") && localStorage.getItem("gh_token")) {{
-    hideGhConfig();
+  // Cio' che tocca il contenuto del report va eseguito solo dopo che e'
+  // stato decifrato e inserito nella pagina.
+  function inizializzaReport() {{
+    // Se le credenziali sono già salvate da una visita precedente, non
+    // mostrare di nuovo il modulo vuoto: sembrerebbe chiedere di nuovo il
+    // token anche quando non serve (dispatchWorkflow legge comunque da qui).
+    if (document.getElementById("gh-config") && localStorage.getItem("gh_owner")
+        && localStorage.getItem("gh_repo") && localStorage.getItem("gh_token")) {{
+      hideGhConfig();
+    }}
+    REGOLE_ATTUALI.forEach((r, i) => renderEventi(i));
   }}
 
   function saveGhConfig() {{
@@ -1704,6 +1891,42 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (el) {{ el.textContent = msg; el.style.color = color; }}
   }}
 
+  // ─── Eventi inseriti a mano nella riga della posizione ─────────────────────
+  // Solo nodi DOM e textContent: i testi vengono dall'utente, mai innerHTML.
+  function renderEventi(i) {{
+    const box = document.getElementById("ev-lista-" + i);
+    if (!box) return;
+    box.replaceChildren();
+    const eventi = REGOLE_ATTUALI[i].eventi || [];
+    if (!eventi.length) {{ box.textContent = "nessuno"; box.style.color = "#999"; return; }}
+    box.style.color = "";
+    eventi.forEach((e, j) => {{
+      const riga = document.createElement("div");
+      const imp = (e.importo !== null && e.importo !== undefined && e.importo !== "") ? " · " + e.importo : "";
+      riga.textContent = e.data.split("-").reverse().join("/") + " " + e.tipo + imp + " ";
+      const x = document.createElement("button");
+      x.type = "button"; x.textContent = "✕"; x.title = "Rimuovi (poi salva le regole)";
+      x.style.cssText = "border:none;background:none;color:#dc2626;cursor:pointer;padding:0 2px";
+      x.onclick = () => {{ eventi.splice(j, 1); renderEventi(i); }};
+      riga.appendChild(x);
+      box.appendChild(riga);
+    }});
+  }}
+
+  function aggiungiEvento(i) {{
+    const tipo = document.getElementById("ev-tipo-" + i).value;
+    const data = document.getElementById("ev-data-" + i).value;
+    const imp  = (document.getElementById("ev-imp-" + i).value || "").trim();
+    if (!data) {{ setSyncStatus("⚠️ Indica la data dell'evento", "#d97706", "regole-status"); return; }}
+    const ev = {{tipo: tipo, data: data}};
+    if (imp) ev.importo = parseFloat(imp);
+    REGOLE_ATTUALI[i].eventi = (REGOLE_ATTUALI[i].eventi || []).concat([ev]);
+    document.getElementById("ev-data-" + i).value = "";
+    document.getElementById("ev-imp-" + i).value = "";
+    renderEventi(i);
+    setSyncStatus("Evento aggiunto: premi «Salva regole» per registrarlo", "#2563eb", "regole-status");
+  }}
+
   async function salvaRegolePosizioni(btn) {{
     const isinMap = {{}};
     const regole = {{}};
@@ -1714,6 +1937,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       const targetV = (document.getElementById("target-" + i).value || "").trim();
       const tesiV   = (document.getElementById("tesi-" + i).value || "").trim();
       const revV    = (document.getElementById("rev-" + i).value || "").trim();
+      const apertV  = (document.getElementById("apertura-" + i).value || "").trim();
       if (!symbol) {{ mancaSimbolo = true; return; }}
       isinMap[r.isin] = {{tv_symbol: symbol, name: r.name, type: r.type || "Azione"}};
       const regola = {{}};
@@ -1721,6 +1945,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       if (targetV) regola.target = parseFloat(targetV);
       if (tesiV)   regola.tesi = tesiV;
       if (revV)    regola.revisione = revV;
+      if (apertV)  regola.data_apertura = apertV;
       if (r.eventi && r.eventi.length) regola.eventi = r.eventi;
       regole[r.isin] = regola;
     }});
@@ -1736,10 +1961,24 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       btn.disabled = false;
     }}
   }}
-</script>
-""" if password_hash else ""
 
-    html = f"""<!DOCTYPE html>
+  // ─── Avvio ────────────────────────────────────────────────────────────────
+  if (CIFRATO) {{
+    document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
+    (async () => {{
+      const k = localStorage.getItem("tr_key"), exp = localStorage.getItem("tr_exp");
+      localStorage.removeItem("tr_auth");          // accesso della versione non cifrata
+      if (!k || !exp || Date.now() > +exp) return;
+      try {{ mostraReport(await decifraReport(daB64(k))); }}
+      catch (e) {{ localStorage.removeItem("tr_key"); }}   // password cambiata
+    }})();
+  }} else {{
+    inizializzaReport();
+  }}
+</script>
+"""
+
+    testa = f"""<!DOCTYPE html>
 <html lang="it">
 <head>
 <meta charset="UTF-8">
@@ -1794,10 +2033,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 </style>
 </head>
 <body>
-
-{lock_screen}
-<div id="report" {"style='display:none'" if password_hash else ""}>
-
+"""
+    contenuto = f"""
 <div class="header">
   <h1>📊 Trading Report</h1>
   <p>{today} — Analisi Momentum Giornaliera</p>
@@ -1816,7 +2053,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
         <th>Distanza da stop</th><th>Distanza da target</th><th>Trend medio periodo</th>
         <th>Eventi (30gg) / Revisione</th><th>Da notare</th><th>Tesi scritta</th>
       </tr></thead>
-      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx, editor_idx_by_isin)}</tbody>
+      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx, editor_idx_by_isin, calendario)}</tbody>
     </table>
     </div>
     <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto qui sopra. La decisione resta tua.</p>
@@ -1831,7 +2068,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   <div class="section">
     <h2>Calendario <span class="badge-count">prossimi 60 giorni</span></h2>
     <table>
-      <thead><tr><th>Data</th><th>Tipo</th><th>Titolo</th></tr></thead>
+      <thead><tr><th>Data</th><th>Tipo</th><th>Titolo</th><th>Dettaglio</th><th>Fonte</th></tr></thead>
       <tbody>{calendario_rows(calendario)}</tbody>
     </table>
   </div>
@@ -1880,10 +2117,11 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   <!-- TOP 10 ETF / ETN / ETC ITALIA -->
   <div class="section">
     <h2>Top ETF / ETN / ETC (Borsa Italiana) — Momentum <span class="badge-count">{len(etfs)} oggi</span></h2>
+    <p class="empty-note">Ordinati per performance a 3 mesi (colonna 3M), tra quelli con liquidità sufficiente e prezzo sopra la EMA200 (o EMA50). Nessun giudizio: solo i dati della riga.</p>
     {"" if etfs else '<p class="empty-note">Nessun ETF/ETN/ETC ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>TER</th><th>AUM</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>TER</th><th>AUM</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>
@@ -1946,10 +2184,14 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   </div>
 
 </div>
-</div>
-{lock_script}</body>
-</html>"""
-    return html
+"""
+    if password:
+        blob = json.dumps(cifra_pagina.cifra({"html": contenuto, "regole": regole_editor_data or []}, password))
+        corpo = (f'{lock_screen}\n<div id="report" style="display:none"></div>\n'
+                 f'<script>const CIFRATO = {blob};</script>\n')
+    else:
+        corpo = f'<div id="report">{contenuto}</div>\n<script>const CIFRATO = null;</script>\n'
+    return testa + corpo + lock_script + "</body>\n</html>"
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
@@ -1975,8 +2217,11 @@ def main():
 
     logger.info("Caricamento regole posizioni, calendario macro e watchlist...")
     regole_map = regole.load_regole()
+    applica_data_manuale(portfolio, regole_map)
     eventi_macro = regole.load_eventi_macro()
-    calendario = build_calendario(portfolio, regole_map, eventi_macro)
+    eventi_auto = cal.scarica_automatici(
+        portfolio, lambda p: tv_to_yahoo_symbol(p.get("yf_symbol") or p.get("symbol")))
+    calendario = cal.costruisci(portfolio, regole_map, eventi_macro, eventi_auto)
     watchlist_data = get_watchlist_data(regole.load_watchlist())
     enrich_storico_esteso(watchlist_data, "watchlist")
 
@@ -1999,7 +2244,9 @@ def main():
 
     logger.info("Building HTML...")
     pwd = os.environ.get("SITE_PASSWORD", "")
-    pwd_hash = hashlib.sha256(pwd.encode()).hexdigest() if pwd else ""
+    if not pwd and os.environ.get("GITHUB_ACTIONS") == "true":
+        # Il repo e' pubblico: senza password la pagina uscirebbe in chiaro.
+        raise SystemExit("SITE_PASSWORD mancante: report non pubblicato per non esporre le posizioni in chiaro")
     regole_editor_data = []
     for p in portfolio:
         isin = p.get("isin")
@@ -2015,9 +2262,11 @@ def main():
             "target": regola.get("target"),
             "tesi": regola.get("tesi") or "",
             "revisione": regola["revisione"].isoformat() if regola.get("revisione") else None,
-            "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat()} for e in regola.get("eventi", [])],
+            "data_apertura": regola["data_apertura"].isoformat() if regola.get("data_apertura") else None,
+            "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat(), "importo": e.get("importo"),
+                        "nota": e.get("nota") or ""} for e in regola.get("eventi", [])],
         })
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash,
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd,
                        regole_map, calendario, segnali_items, regole_editor_data)
 
     os.makedirs("docs", exist_ok=True)
