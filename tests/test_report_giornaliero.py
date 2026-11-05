@@ -79,3 +79,66 @@ def test_storico_aggiunge_colonna_valuta_e_confronto_ieri(tmp_path, monkeypatch)
     # Senza conversione e senza valuta annotata ieri: confronto normale
     normale = G.allinea_valuta(_pos(isin="IE000TEST", price=7.10), "EUR", {})
     assert "da 7.04 a 7.10" in G._confronto_ieri(normale)
+
+
+# ─── Bug 2: giorni di detenzione ─────────────────────────────────────────────
+
+import portfolio_sync as PS
+import regole
+
+
+def _mov(isin, segno, qty, giorni_fa, prezzo=10.0):
+    return {"isin": isin, "titolo": isin, "segno": segno, "quantita": qty, "prezzo": prezzo,
+            "divisa": "EUR", "data_valuta": date.today() - timedelta(days=giorni_fa)}
+
+
+def test_fifo_data_primo_lotto_in_essere_e_tranche():
+    mov = [_mov("A", "A", 100, 120), _mov("A", "A", 50, 90), _mov("A", "V", 100, 70),  # primo lotto chiuso
+           _mov("A", "A", 30, 40), _mov("A", "A", 20, 10)]
+    (p,) = PS.build_fifo_positions(mov)
+    assert p["quantita"] == 100
+    assert p["giorni_detenzione"] == 90          # il lotto da 50 di 90gg fa, non la media pesata
+    assert p["tranche"] == 3
+
+
+def test_sintesi_prende_data_dallo_storico_se_quantita_combacia():
+    sintesi = [{"isin": "A", "quantita": 100.0, "giorni_detenzione": None, "data_apertura": None},
+               {"isin": "B", "quantita": 60.0, "giorni_detenzione": None, "data_apertura": None},
+               {"isin": "C", "quantita": 5.0, "giorni_detenzione": None, "data_apertura": None}]
+    storico_mov = [_mov("A", "A", 100, 75), _mov("B", "A", 40, 30)]
+    PS.date_da_storico(sintesi, storico_mov)
+    a, b, c = sintesi
+    assert a["giorni_detenzione"] == 75 and a["tranche"] == 1 and a["data_apertura_motivo"] is None
+    assert b["giorni_detenzione"] is None and "40" in b["data_apertura_motivo"] and "60" in b["data_apertura_motivo"]
+    assert c["giorni_detenzione"] is None and "non risulta aperta" in c["data_apertura_motivo"]
+
+
+def test_sintesi_senza_storico_dice_perche():
+    sintesi = [{"isin": "A", "quantita": 1.0, "giorni_detenzione": None}]
+    PS.date_da_storico(sintesi, [])
+    assert "storico movimenti" in sintesi[0]["data_apertura_motivo"]
+
+
+def test_data_manuale_solo_come_ripiego():
+    oggi = date(2026, 11, 5)
+    portafoglio = [{"isin": "A", "giorni_detenzione": None},
+                   {"isin": "B", "giorni_detenzione": 30, "data_apertura": "2026-10-06", "data_apertura_fonte": "movimenti"}]
+    regole_map = {"A": {"data_apertura": date(2026, 8, 17)}, "B": {"data_apertura": date(2026, 1, 1)}}
+    G.applica_data_manuale(portafoglio, regole_map, oggi=oggi)
+    assert portafoglio[0]["giorni_detenzione"] == 80 and portafoglio[0]["data_apertura_fonte"] == "manuale"
+    assert portafoglio[1]["giorni_detenzione"] == 30            # la data dai movimenti resta prioritaria
+
+
+def test_giorni_html_fasce_tranche_e_motivo():
+    assert "#16a34a" in G.giorni_detenzione_html(59)
+    assert "#d97706" in G.giorni_detenzione_html(60) and "#d97706" in G.giorni_detenzione_html(80)
+    assert "#dc2626" in G.giorni_detenzione_html(81)
+    cella = G.giorni_detenzione_html(90, "2026-08-07", 3, "movimenti")
+    assert "dal 07/08/2026" in cella and "3 tranche" in cella
+    assert "inserita a mano" in G.giorni_detenzione_html(10, "2026-10-26", 1, "manuale")
+    assert "Portafoglio di sintesi" in G.giorni_detenzione_html(None, motivo="l'export 'Portafoglio di sintesi' non contiene date")
+
+
+def test_regole_leggono_data_apertura(monkeypatch):
+    monkeypatch.setattr(regole, "REGOLE_POSIZIONI_YAML", '{"A": {"stop": 1, "data_apertura": "2026-08-17"}}')
+    assert regole.load_regole()["A"]["data_apertura"] == date(2026, 8, 17)

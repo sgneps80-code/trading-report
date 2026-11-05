@@ -77,7 +77,7 @@ def _load_yaml_source(secret_value, path, nome_secret):
 
 
 def load_regole(path=None):
-    """Restituisce {isin: {stop, target, revisione, tesi, eventi}}.
+    """Restituisce {isin: {stop, target, revisione, data_apertura, tesi, eventi}}.
     Un ISIN senza voce nel file ha semplicemente tutti i campi assenti:
     il report lo segnala come 'nessuna regola scritta', non e' un errore."""
     path = path or REGOLE_PATH
@@ -101,6 +101,9 @@ def load_regole(path=None):
             "stop": r.get("stop"),
             "target": r.get("target"),
             "revisione": _parse_date(r.get("revisione")),
+            # Inserita a mano dalla pagina: usata solo se lo storico movimenti
+            # non permette di ricavare la data del primo acquisto in essere.
+            "data_apertura": _parse_date(r.get("data_apertura")),
             "tesi": r.get("tesi", ""),
             "eventi": eventi,
         }

@@ -938,6 +938,9 @@ def get_portfolio_data():
         parsed["divisa"]            = item.get("divisa")
         parsed["data_apertura"]     = item.get("data_apertura")
         parsed["giorni_detenzione"] = item.get("giorni_detenzione")
+        parsed["tranche"]           = item.get("tranche")
+        parsed["data_apertura_motivo"] = item.get("data_apertura_motivo")
+        parsed["data_apertura_fonte"] = "movimenti" if item.get("data_apertura") else None
         out.append(parsed)
 
     # Valuta del dato TradingView vs valuta del carico: un ETF UCITS
@@ -1454,16 +1457,45 @@ def var_da_carico_html(price, prezzo_medio, valuta_stato=None):
         out += _NOTA.format("⚠ valuta del prezzo non verificata rispetto al carico")
     return out
 
-def giorni_detenzione_html(giorni):
+def applica_data_manuale(portfolio, regole_map, oggi=None):
+    """Data di apertura inserita a mano nella pagina: ripiego per le posizioni
+    di cui lo storico movimenti non ricava la data (mai al posto di una
+    ricavata dai movimenti, che resta la fonte primaria)."""
+    oggi = oggi or date.today()
+    for p in portfolio:
+        if p.get("giorni_detenzione") is not None:
+            continue
+        manuale = (regole_map.get(p.get("isin")) or {}).get("data_apertura")
+        if manuale:
+            p["data_apertura"] = manuale.isoformat()
+            p["giorni_detenzione"] = max(0, (oggi - manuale).days)
+            p["data_apertura_fonte"] = "manuale"
+    return portfolio
+
+
+def giorni_detenzione_html(giorni, data_apertura=None, tranche=None, fonte=None, motivo=None):
     if giorni is None:
-        return '<span style="color:#999">n.d.</span>'
+        out = '<span style="color:#999">n.d.</span>'
+        if motivo:
+            out += _NOTA.format(html.escape(motivo) + " — oppure inserisci la data qui sotto")
+        return out
     if giorni < 60:
         color = "#16a34a"
     elif giorni <= 80:
         color = "#d97706"
     else:
         color = "#dc2626"
-    return f'<span style="color:{color};font-weight:700">{giorni} gg</span>'
+    out = f'<span style="color:{color};font-weight:700">{giorni} gg</span>'
+    dettagli = []
+    if data_apertura:
+        dettagli.append("dal " + date.fromisoformat(data_apertura).strftime("%d/%m/%Y"))
+    if tranche and tranche > 1:
+        dettagli.append(f"{tranche} tranche")
+    if fonte == "manuale":
+        dettagli.append("data inserita a mano")
+    if dettagli:
+        out += _NOTA.format(" · ".join(dettagli))
+    return out
 
 def distanza_da_livello_html(price, livello, verso_alto):
     """verso_alto=True per il target (quanto manca, in %, perche' il prezzo
@@ -1599,10 +1631,14 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
                             f'style="width:80px;{mini}">')
             rev_input = (f'<br><input id="rev-{idx}" type="date" title="Data in cui vuoi rivedere la tesi (facoltativo)" '
                         f'value="{revisione.isoformat() if revisione else ""}" style="{mini}">')
+            apertura_manuale = regola.get("data_apertura")
+            apertura_input = (f'<br><input id="apertura-{idx}" type="date" '
+                              f'title="Data del primo acquisto ancora in essere: usata solo se lo storico movimenti non la ricava" '
+                              f'value="{apertura_manuale.isoformat() if apertura_manuale else ""}" style="{mini}">')
             tesi_field = (f'<input id="tesi-{idx}" value="{html.escape(tesi)}" '
                          f'placeholder="perché tieni questa posizione" style="width:100%;{mini}">')
         else:
-            ticker_input = stop_input = target_input = rev_input = ""
+            ticker_input = stop_input = target_input = rev_input = apertura_input = ""
             tesi_html = html.escape(tesi) if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
             tesi_field = f'<div style="color:#444;font-size:12px">{tesi_html}</div>'
 
@@ -1610,7 +1646,8 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
             <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{ticker_input}</td>
             <td>{prezzo_html(p)}</td>
             <td>{var_da_carico_html(price, p.get('prezzo_medio'), p.get('valuta_stato'))}</td>
-            <td>{giorni_detenzione_html(p.get('giorni_detenzione'))}</td>
+            <td>{giorni_detenzione_html(p.get('giorni_detenzione'), p.get('data_apertura'), p.get('tranche'),
+                                        p.get('data_apertura_fonte'), p.get('data_apertura_motivo'))}{apertura_input}</td>
             <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}{stop_input}</td>
             <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}{target_input}</td>
             <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
@@ -1861,6 +1898,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       const targetV = (document.getElementById("target-" + i).value || "").trim();
       const tesiV   = (document.getElementById("tesi-" + i).value || "").trim();
       const revV    = (document.getElementById("rev-" + i).value || "").trim();
+      const apertV  = (document.getElementById("apertura-" + i).value || "").trim();
       if (!symbol) {{ mancaSimbolo = true; return; }}
       isinMap[r.isin] = {{tv_symbol: symbol, name: r.name, type: r.type || "Azione"}};
       const regola = {{}};
@@ -1868,6 +1906,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       if (targetV) regola.target = parseFloat(targetV);
       if (tesiV)   regola.tesi = tesiV;
       if (revV)    regola.revisione = revV;
+      if (apertV)  regola.data_apertura = apertV;
       if (r.eventi && r.eventi.length) regola.eventi = r.eventi;
       regole[r.isin] = regola;
     }});
@@ -2122,6 +2161,7 @@ def main():
 
     logger.info("Caricamento regole posizioni, calendario macro e watchlist...")
     regole_map = regole.load_regole()
+    applica_data_manuale(portfolio, regole_map)
     eventi_macro = regole.load_eventi_macro()
     calendario = build_calendario(portfolio, regole_map, eventi_macro)
     watchlist_data = get_watchlist_data(regole.load_watchlist())
@@ -2162,6 +2202,7 @@ def main():
             "target": regola.get("target"),
             "tesi": regola.get("tesi") or "",
             "revisione": regola["revisione"].isoformat() if regola.get("revisione") else None,
+            "data_apertura": regola["data_apertura"].isoformat() if regola.get("data_apertura") else None,
             "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat()} for e in regola.get("eventi", [])],
         })
     html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash,
