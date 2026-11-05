@@ -356,3 +356,10 @@ def test_javascript_della_pagina_valido(tmp_path, monkeypatch):
             f.write_text(js, encoding="utf-8")
             r = subprocess.run(["node", "--check", str(f)], capture_output=True, text=True)
             assert r.returncode == 0, r.stderr
+
+
+def test_yfinance_non_scrive_nel_log_pubblico(caplog):
+    import logging
+    with caplog.at_level(logging.DEBUG):
+        logging.getLogger("yfinance").error("No fundamentals data found for symbol: XUSE.MI")
+    assert "XUSE.MI" not in caplog.text

@@ -22,6 +22,12 @@ import re
 from datetime import date, datetime, timedelta
 
 logger = logging.getLogger(__name__)
+# yfinance scrive nei suoi messaggi d'errore il simbolo richiesto (es. un 404
+# "No fundamentals data found for symbol: ..."): nel log pubblico di GitHub
+# Actions rivelerebbe le posizioni. I suoi errori qui sono gia' gestiti come
+# "nessun evento", quindi il suo logger tace del tutto.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL + 1)
+logging.getLogger("yfinance").propagate = False
 
 TRIMESTRALE = "Trimestrale / CdA"
 STACCO = "Stacco dividendo"
@@ -132,15 +138,13 @@ def costruisci(portfolio, regole_map, eventi_macro, eventi_auto=None, oggi=None,
 def scarica_automatici(portfolio, simbolo_yahoo):
     """{isin: eventi} dal calendario Yahoo per le posizioni; simbolo_yahoo e'
     una funzione posizione -> simbolo Yahoo. Nel log solo conteggi (repo pubblico)."""
-    out, errori = {}, 0
+    out = {}
     for p in portfolio:
         isin = p.get("isin")
         if not isin:
             continue
-        eventi, errore = eventi_yahoo(simbolo_yahoo(p))
-        if errore:
-            errori += 1
-        out[isin] = eventi
-    logger.info(f"Calendario Yahoo: {sum(len(v) for v in out.values())} eventi per {len(out)} posizioni, "
-                f"{errori} senza calendario disponibile")
+        out[isin], _ = eventi_yahoo(simbolo_yahoo(p))
+    con_eventi = sum(1 for v in out.values() if v)
+    logger.info(f"Calendario Yahoo: {sum(len(v) for v in out.values())} eventi; {con_eventi} posizioni su "
+                f"{len(out)} con almeno un evento (le altre: nessun dato Yahoo, solo inserimento manuale)")
     return out
