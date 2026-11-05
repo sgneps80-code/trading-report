@@ -782,6 +782,103 @@ def _tv_fetch_symbols(syms):
         logger.warning(f"TV fetch batch: {e}")
     return results
 
+# Campi di livello di prezzo restituiti da parse_tv_row: vanno convertiti tutti
+# insieme, altrimenti il prezzo convertito verrebbe confrontato con EMA e
+# massimi/minimi ancora nella valuta di origine. RSI e performance % no: sono
+# rapporti, non cambiano con la valuta.
+_CAMPI_PREZZO = ("price", "ema20", "ema50", "ema200", "day_high", "day_low",
+                 "high_3m", "low_3m", "high_52w", "low_52w", "macd", "macd_sig", "macd_hist")
+
+
+def _tv_fetch_valute(syms):
+    """{simbolo: valuta del prezzo restituito da TradingView}. Richiesta a parte
+    rispetto a TV_COLS: se la colonna non fosse valida romperebbe solo questa,
+    non lo screener. {} in caso di errore (valuta non verificabile)."""
+    out = {}
+    if not syms:
+        return out
+    try:
+        data = tv_request("https://scanner.tradingview.com/global/scan",
+                          {"symbols": {"tickers": list(syms)}, "columns": ["currency"]})
+        for row in (data.get("data") or []):
+            ccy = ((row.get("d") or [None])[0] or "").upper()
+            if ccy:
+                out[row.get("s", "")] = ccy
+    except Exception as e:
+        logger.warning(f"TV valute: {e}")
+    return out
+
+
+def _tv_fetch_cambi(coppie):
+    """{(da, a): unita' di `a` per 1 `da`} dall'ultima quotazione FX_IDC su
+    TradingView, cioe' lo stesso momento del prezzo letto dallo screener.
+    Se manca la coppia diretta si usa l'inversa. Coppie non trovate assenti."""
+    coppie = {(da, a) for da, a in coppie if da and a and da != a}
+    if not coppie:
+        return {}
+    tickers = []
+    for da, a in coppie:
+        tickers += [f"FX_IDC:{da}{a}", f"FX_IDC:{a}{da}"]
+    quotazioni = {}
+    try:
+        data = tv_request("https://scanner.tradingview.com/global/scan",
+                          {"symbols": {"tickers": tickers}, "columns": ["close"]})
+        for row in (data.get("data") or []):
+            c = (row.get("d") or [None])[0]
+            if c:
+                quotazioni[row.get("s", "")] = c
+    except Exception as e:
+        logger.warning(f"TV cambi: {e}")
+    out = {}
+    for da, a in coppie:
+        if quotazioni.get(f"FX_IDC:{da}{a}"):
+            out[(da, a)] = (quotazioni[f"FX_IDC:{da}{a}"], f"FX_IDC:{da}{a}")
+        elif quotazioni.get(f"FX_IDC:{a}{da}"):
+            out[(da, a)] = (1 / quotazioni[f"FX_IDC:{a}{da}"], f"1/FX_IDC:{a}{da}")
+    return out
+
+
+def allinea_valuta(p, valuta_dato, cambi):
+    """Porta i campi di prezzo di una posizione nella valuta del carico (`divisa`
+    del dossier) prima di qualsiasi confronto col prezzo medio, stop o target.
+    Imposta sempre p['valuta_stato']:
+    - 'ok': il dato e' gia' nella valuta del carico;
+    - 'convertita': convertito, con valuta/prezzo di origine e cambio usato;
+    - 'cambio_mancante': valute diverse e cambio non disponibile — i campi di
+      prezzo vengono azzerati, perche' un numero nella valuta sbagliata
+      etichettato come quella giusta e' peggio di nessun numero;
+    - 'non_verificata': TradingView non ha detto in che valuta e' il dato."""
+    divisa = (p.get("divisa") or "").upper()
+    if not p.get("price"):
+        p["valuta_stato"] = "ok"
+        return p
+    if not valuta_dato or not divisa:
+        p["valuta_stato"] = "non_verificata"
+        p["valuta_prezzo"] = valuta_dato or divisa or ""
+        return p
+    p["valuta_prezzo"] = divisa
+    if valuta_dato == divisa:
+        p["valuta_stato"] = "ok"
+        return p
+    p["valuta_origine"] = valuta_dato
+    p["prezzo_origine"] = p["price"]
+    cambio = cambi.get((valuta_dato, divisa))
+    if not cambio:
+        p["valuta_stato"] = "cambio_mancante"
+        for campo in _CAMPI_PREZZO:
+            p[campo] = None
+        return p
+    fattore, simbolo_fx = cambio
+    for campo in _CAMPI_PREZZO:
+        if p.get(campo) is not None:
+            p[campo] = p[campo] * fattore
+    p["price"] = round(p["price"], 4)
+    p["valuta_stato"] = "convertita"
+    p["cambio"] = fattore
+    p["cambio_simbolo"] = simbolo_fx
+    return p
+
+
 def get_portfolio_data():
     """Recupera dati tecnici del portafoglio via TradingView screener.
     Accetta 'EXCHANGE:TICKER' oppure solo 'TICKER'.
@@ -842,6 +939,23 @@ def get_portfolio_data():
         parsed["data_apertura"]     = item.get("data_apertura")
         parsed["giorni_detenzione"] = item.get("giorni_detenzione")
         out.append(parsed)
+
+    # Valuta del dato TradingView vs valuta del carico: un ETF UCITS
+    # denominato in USD e quotato in EUR a Milano puo' arrivare dallo screener
+    # in USD, e confrontarlo col carico in EUR da' una variazione falsa.
+    con_prezzo = [p for p in out if p.get("price")]
+    valute = _tv_fetch_valute({p["tv_symbol"] for p in con_prezzo if p.get("tv_symbol")})
+    valuta_di = {id(p): valute.get(p.get("tv_symbol", "")) for p in con_prezzo}
+    cambi = _tv_fetch_cambi({(valuta_di[id(p)], (p.get("divisa") or "").upper()) for p in con_prezzo})
+    for p in con_prezzo:
+        allinea_valuta(p, valuta_di[id(p)], cambi)
+    stati = [p.get("valuta_stato") for p in con_prezzo]
+    # Solo conteggi nel log: e' un repo pubblico.
+    logger.info(
+        f"Valuta prezzi portafoglio: {stati.count('ok')} gia' nella valuta del carico, "
+        f"{stati.count('convertita')} convertite, {stati.count('cambio_mancante')} senza cambio, "
+        f"{stati.count('non_verificata')} non verificate"
+    )
     return out
 
 def get_watchlist_data(watchlist):
@@ -920,7 +1034,15 @@ def _confronto_ieri(p):
     if not prev:
         return "nessun dato di ieri (prima rilevazione per questa posizione)"
     parti = []
-    if prev.get("close") and p.get("price"):
+    valuta_ieri = prev.get("valuta") or ""
+    valuta_oggi = p.get("valuta_prezzo") or ""
+    # Ieri registrato senza conversione (riga senza valuta annotata) o in
+    # un'altra valuta: la differenza sarebbe il cambio, non il mercato.
+    valute_diverse = (valuta_ieri != valuta_oggi) if valuta_ieri else p.get("valuta_stato") == "convertita"
+    if prev.get("close") and p.get("price") and valute_diverse:
+        parti.append(f"prezzo di ieri registrato in un'altra valuta ({valuta_ieri or 'senza conversione'}), "
+                     f"oggi in {valuta_oggi}: confronto di prezzo non significativo")
+    elif prev.get("close") and p.get("price"):
         var = (p["price"] / prev["close"] - 1) * 100
         parti.append(f"prezzo da {prev['close']:.2f} a {p['price']:.2f} ({var:+.1f}%)")
     if prev.get("rsi") is not None and p.get("rsi") is not None:
@@ -1298,12 +1420,39 @@ def etf_rows(lst, analysis_map, market_delta=0):
         </tr>"""
     return rows
 
-def var_da_carico_html(price, prezzo_medio):
+_NOTA = '<br><span style="color:#999;font-size:11px">{}</span>'
+
+
+def prezzo_html(p):
+    """Prezzo con la valuta effettivamente usata e, se c'e' stata, la
+    conversione — cosi' un errore di valuta resta visibile se si ripresenta."""
+    stato = p.get("valuta_stato")
+    divisa = (p.get("divisa") or "").upper()
+    price = p.get("price")
+    if stato == "cambio_mancante":
+        return ('<span style="color:#999">n.d.</span>'
+                + _NOTA.format(f"dato in {p['valuta_origine']}, carico in {divisa}: cambio non disponibile"))
+    if not price:
+        return '<span style="color:#999">n.d.</span>'
+    if stato == "convertita":
+        return (f"{price:.2f} {divisa}"
+                + _NOTA.format(f"da {p['prezzo_origine']:.2f} {p['valuta_origine']} × "
+                               f"{p['cambio']:.4f} ({html.escape(p['cambio_simbolo'])})"))
+    if stato == "non_verificata":
+        return (f"{price:.2f} {html.escape(p.get('valuta_prezzo') or '')}"
+                + _NOTA.format("⚠ valuta del dato non verificata"))
+    return f"{price:.2f} {p.get('valuta_prezzo') or divisa}"
+
+
+def var_da_carico_html(price, prezzo_medio, valuta_stato=None):
     if not price or not prezzo_medio:
         return '<span style="color:#999">n.d.</span>'
     var = (price / prezzo_medio - 1) * 100
     color = "#16a34a" if var >= 0 else "#dc2626"
-    return f'<span style="color:{color};font-weight:700">{var:+.1f}%</span>'
+    out = f'<span style="color:{color};font-weight:700">{var:+.1f}%</span>'
+    if valuta_stato == "non_verificata":
+        out += _NOTA.format("⚠ valuta del prezzo non verificata rispetto al carico")
+    return out
 
 def giorni_detenzione_html(giorni):
     if giorni is None:
@@ -1431,9 +1580,7 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
                 ) if isin else (None, False)
             else:
                 g200, certo200 = None, False
-        price_str = f"{price:.2f}" if price else "n.d."
-        divisa = p.get("divisa") or ""
-        tesi = regola.get("tesi") or ""
+        tesi =regola.get("tesi") or ""
         nome = p.get("name", p.get("symbol", ""))
         simbolo = p.get("yf_symbol", p.get("symbol", ""))
         revisione = regola.get("revisione")
@@ -1461,8 +1608,8 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
 
         rows += f"""<tr>
             <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{ticker_input}</td>
-            <td>{price_str} {divisa}</td>
-            <td>{var_da_carico_html(price, p.get('prezzo_medio'))}</td>
+            <td>{prezzo_html(p)}</td>
+            <td>{var_da_carico_html(price, p.get('prezzo_medio'), p.get('valuta_stato'))}</td>
             <td>{giorni_detenzione_html(p.get('giorni_detenzione'))}</td>
             <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}{stop_input}</td>
             <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}{target_input}</td>

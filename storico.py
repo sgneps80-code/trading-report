@@ -36,9 +36,13 @@ logger = logging.getLogger(__name__)
 STORICO_PATH = os.environ.get("STORICO_PATH", "data/storico_indicatori.csv")
 STORICO_SALT = os.environ.get("STORICO_SALT", "")
 
+# "valuta": valuta dei campi di prezzo della riga (close, high, low, EMA).
+# Aggiunta dopo che un ETF registrato per settimane in USD e' passato a EUR:
+# senza, il confronto con ieri non sa riconoscere un cambio di valuta del dato.
+# Righe precedenti all'aggiunta: vuota (= non annotata).
 _FIELDS = ["data", "categoria", "symbol", "isin", "close", "high", "low", "volume", "vol_10d",
-           "rsi", "ema20", "ema50", "ema200", "macd_hist", "perf_1m", "perf_3m"]
-_NUMERICI = [c for c in _FIELDS if c not in ("data", "categoria", "symbol", "isin")]
+           "rsi", "ema20", "ema50", "ema200", "macd_hist", "perf_1m", "perf_3m", "valuta"]
+_NUMERICI = [c for c in _FIELDS if c not in ("data", "categoria", "symbol", "isin", "valuta")]
 
 _salt_avvisato = False
 
@@ -70,7 +74,8 @@ def _read_rows(path):
             except (KeyError, ValueError):
                 continue
             parsed = {"data": d, "categoria": row.get("categoria"),
-                      "symbol": row.get("symbol"), "isin": row.get("isin") or None}
+                      "symbol": row.get("symbol"), "isin": row.get("isin") or None,
+                      "valuta": row.get("valuta") or ""}
             for campo in _NUMERICI:
                 v = row.get(campo)
                 parsed[campo] = float(v) if v not in (None, "") else None
@@ -78,11 +83,30 @@ def _read_rows(path):
     return out
 
 
+def _aggiorna_intestazione(path):
+    """Se il CSV esiste con un'intestazione senza le colonne nuove di _FIELDS,
+    lo riscrive una volta con l'intestazione completa (colonne nuove vuote
+    nelle righe vecchie): appendere righe piu' lunghe dell'intestazione le
+    renderebbe illeggibili per csv.DictReader."""
+    if not os.path.exists(path):
+        return
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        if list(reader.fieldnames or []) == _FIELDS:
+            return
+        righe = list(reader)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(righe)
+
+
 def record_daily(portfolio, segnali, path=None):
     """Aggiunge la riga di oggi per le posizioni aperte e per i segnali del
     giorno, una sola volta al giorno per (categoria, symbol)."""
     path = path or STORICO_PATH
     today = date.today().isoformat()
+    _aggiorna_intestazione(path)
 
     esistenti = set()
     if os.path.exists(path):
@@ -108,6 +132,7 @@ def record_daily(portfolio, segnali, path=None):
                 "rsi": _num(r.get("rsi")), "ema20": _num(r.get("ema20")), "ema50": _num(r.get("ema50")),
                 "ema200": _num(r.get("ema200")), "macd_hist": _num(r.get("macd_hist")),
                 "perf_1m": _num(r.get("perf_1m")), "perf_3m": _num(r.get("perf_3m")),
+                "valuta": r.get("valuta_prezzo") or "",
             })
         return out
 
