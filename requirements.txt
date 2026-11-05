@@ -6,3 +6,5 @@ PyYAML>=6.0
 # Calendario Yahoo (trimestrali, stacchi) delle posizioni; stessa versione
 # del workflow "Analisi tecnica".
 yfinance==1.7.0
+# Cifratura di docs/index.html (AES-GCM), vedi cifra_pagina.py
+cryptography>=41

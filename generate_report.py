@@ -6,7 +6,7 @@ Analisi:   RSI + MACD + Trend EMA + Raccomandazione TV aggregata (26 indicatori)
 AI:        Anthropic Claude Haiku
 """
 
-import os, json, hashlib, html, logging
+import os, json, html, logging
 from datetime import datetime, date, timedelta, timezone
 import requests
 import anthropic
@@ -16,6 +16,7 @@ import storico
 import indicatori_storici
 import segnali_medio_periodo
 import calendario as cal
+import cifra_pagina
 import analisi_ui
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -1699,12 +1700,15 @@ def _analysis_map(items):
             m.setdefault(bare.split(":")[-1], a)
     return m
 
-def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="",
+def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password="",
                regole_map=None, calendario=None, segnali_items=None, regole_editor_data=None):
     regole_map = regole_map or {}
     # "</" spezzato: un testo scritto dall'utente (tesi, note) non deve poter
     # chiudere il tag <script> in cui questo JSON viene inserito.
     regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False).replace("</", "<\\/")
+    # Con la password le regole (posizioni) viaggiano solo dentro il blob
+    # cifrato insieme al resto del report: nel sorgente resta una lista vuota.
+    regole_js = "[]" if password else regole_editor_json
     calendario = calendario or []
     segnali_items = segnali_items or []
     # Il run schedulato parte a mercati USA chiusi (22:30 italiane): la
@@ -1750,38 +1754,62 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     <p id="err" style="color:#dc2626;font-size:13px;margin-top:12px;display:none">Password errata</p>
   </div>
 </div>
-""" if password_hash else ""
+""" if password else ""
 
     lock_script = f"""
 <script>
-  const HASH = "{password_hash}";
-  const REGOLE_ATTUALI = {regole_editor_json};
+  let REGOLE_ATTUALI = {regole_js};
 
-  // ─── Autenticazione ───────────────────────────────────────────────────────
-  async function sha256(msg) {{
-    const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,"0")).join("");
+  // ─── Accesso: il contenuto e' cifrato, la password serve a decifrarlo ─────
+  // AES-256-GCM, chiave PBKDF2-SHA256 dalla password (vedi cifra_pagina.py).
+  // Nessun hash della password nella pagina: una password sbagliata fa
+  // semplicemente fallire la decifratura.
+  function daB64(s) {{ return Uint8Array.from(atob(s), c => c.charCodeAt(0)); }}
+  function aB64(buf) {{ return btoa(String.fromCharCode(...new Uint8Array(buf))); }}
+
+  async function chiaveDaPassword(pwd) {{
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pwd), "PBKDF2", false, ["deriveBits"]);
+    return crypto.subtle.deriveBits({{name: "PBKDF2", hash: "SHA-256", salt: daB64(CIFRATO.salt),
+                                      iterations: CIFRATO.iter}}, base, 256);
   }}
+
+  async function decifraReport(chiaveRaw) {{
+    const key = await crypto.subtle.importKey("raw", chiaveRaw, "AES-GCM", false, ["decrypt"]);
+    const pt = await crypto.subtle.decrypt({{name: "AES-GCM", iv: daB64(CIFRATO.iv)}}, key, daB64(CIFRATO.ct));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }}
+
+  function mostraReport(dati) {{
+    const rep = document.getElementById("report");
+    rep.innerHTML = dati.html;
+    // Gli <script> inseriti con innerHTML non vengono eseguiti: li si ricrea.
+    rep.querySelectorAll("script").forEach(vecchio => {{
+      const nuovo = document.createElement("script");
+      nuovo.textContent = vecchio.textContent;
+      vecchio.replaceWith(nuovo);
+    }});
+    REGOLE_ATTUALI = dati.regole || [];
+    const lock = document.getElementById("lock");
+    if (lock) lock.style.display = "none";
+    rep.style.display = "block";
+    inizializzaReport();
+  }}
+
   async function unlock() {{
-    const h = await sha256(document.getElementById("pwd").value);
-    if (h === HASH) {{
-      document.getElementById("lock").style.display = "none";
-      document.getElementById("report").style.display = "block";
-      localStorage.setItem("tr_auth", h);
-      localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
-    }} else {{
-      document.getElementById("err").style.display = "block";
+    const err = document.getElementById("err");
+    err.style.display = "none";
+    try {{
+      const chiave = await chiaveDaPassword(document.getElementById("pwd").value);
+      const dati = await decifraReport(chiave);
+      try {{
+        localStorage.setItem("tr_key", aB64(chiave));
+        localStorage.setItem("tr_exp", Date.now() + 7*24*60*60*1000);
+      }} catch (e) {{}}
+      mostraReport(dati);
+    }} catch (e) {{
+      err.style.display = "block";
     }}
   }}
-  document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
-  (async () => {{
-    const h = localStorage.getItem("tr_auth");
-    const exp = localStorage.getItem("tr_exp");
-    if (h && exp && Date.now() < +exp && h === HASH) {{
-      document.getElementById("lock").style.display = "none";
-      document.getElementById("report").style.display = "block";
-    }}
-  }})();
 
   function showGhConfig() {{
     document.getElementById("gh-config").style.display = "block";
@@ -1793,11 +1821,17 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     document.getElementById("gh-config-saved").style.display = "block";
   }}
 
-  // Se le credenziali sono già salvate da una visita precedente, non
-  // mostrare di nuovo il modulo vuoto: sembrerebbe chiedere di nuovo il
-  // token anche quando non serve (dispatchWorkflow legge comunque da qui).
-  if (localStorage.getItem("gh_owner") && localStorage.getItem("gh_repo") && localStorage.getItem("gh_token")) {{
-    hideGhConfig();
+  // Cio' che tocca il contenuto del report va eseguito solo dopo che e'
+  // stato decifrato e inserito nella pagina.
+  function inizializzaReport() {{
+    // Se le credenziali sono già salvate da una visita precedente, non
+    // mostrare di nuovo il modulo vuoto: sembrerebbe chiedere di nuovo il
+    // token anche quando non serve (dispatchWorkflow legge comunque da qui).
+    if (document.getElementById("gh-config") && localStorage.getItem("gh_owner")
+        && localStorage.getItem("gh_repo") && localStorage.getItem("gh_token")) {{
+      hideGhConfig();
+    }}
+    REGOLE_ATTUALI.forEach((r, i) => renderEventi(i));
   }}
 
   function saveGhConfig() {{
@@ -1893,8 +1927,6 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     setSyncStatus("Evento aggiunto: premi «Salva regole» per registrarlo", "#2563eb", "regole-status");
   }}
 
-  REGOLE_ATTUALI.forEach((r, i) => renderEventi(i));
-
   async function salvaRegolePosizioni(btn) {{
     const isinMap = {{}};
     const regole = {{}};
@@ -1929,10 +1961,24 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
       btn.disabled = false;
     }}
   }}
-</script>
-""" if password_hash else ""
 
-    html = f"""<!DOCTYPE html>
+  // ─── Avvio ────────────────────────────────────────────────────────────────
+  if (CIFRATO) {{
+    document.getElementById("pwd").addEventListener("keydown", e => e.key === "Enter" && unlock());
+    (async () => {{
+      const k = localStorage.getItem("tr_key"), exp = localStorage.getItem("tr_exp");
+      localStorage.removeItem("tr_auth");          // accesso della versione non cifrata
+      if (!k || !exp || Date.now() > +exp) return;
+      try {{ mostraReport(await decifraReport(daB64(k))); }}
+      catch (e) {{ localStorage.removeItem("tr_key"); }}   // password cambiata
+    }})();
+  }} else {{
+    inizializzaReport();
+  }}
+</script>
+"""
+
+    testa = f"""<!DOCTYPE html>
 <html lang="it">
 <head>
 <meta charset="UTF-8">
@@ -1987,10 +2033,8 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
 </style>
 </head>
 <body>
-
-{lock_screen}
-<div id="report" {"style='display:none'" if password_hash else ""}>
-
+"""
+    contenuto = f"""
 <div class="header">
   <h1>📊 Trading Report</h1>
   <p>{today} — Analisi Momentum Giornaliera</p>
@@ -2140,10 +2184,14 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   </div>
 
 </div>
-</div>
-{lock_script}</body>
-</html>"""
-    return html
+"""
+    if password:
+        blob = json.dumps(cifra_pagina.cifra({"html": contenuto, "regole": regole_editor_data or []}, password))
+        corpo = (f'{lock_screen}\n<div id="report" style="display:none"></div>\n'
+                 f'<script>const CIFRATO = {blob};</script>\n')
+    else:
+        corpo = f'<div id="report">{contenuto}</div>\n<script>const CIFRATO = null;</script>\n'
+    return testa + corpo + lock_script + "</body>\n</html>"
 
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 
@@ -2196,7 +2244,9 @@ def main():
 
     logger.info("Building HTML...")
     pwd = os.environ.get("SITE_PASSWORD", "")
-    pwd_hash = hashlib.sha256(pwd.encode()).hexdigest() if pwd else ""
+    if not pwd and os.environ.get("GITHUB_ACTIONS") == "true":
+        # Il repo e' pubblico: senza password la pagina uscirebbe in chiaro.
+        raise SystemExit("SITE_PASSWORD mancante: report non pubblicato per non esporre le posizioni in chiaro")
     regole_editor_data = []
     for p in portfolio:
         isin = p.get("isin")
@@ -2216,7 +2266,7 @@ def main():
             "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat(), "importo": e.get("importo"),
                         "nota": e.get("nota") or ""} for e in regola.get("eventi", [])],
         })
-    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash,
+    html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd,
                        regole_map, calendario, segnali_items, regole_editor_data)
 
     os.makedirs("docs", exist_ok=True)

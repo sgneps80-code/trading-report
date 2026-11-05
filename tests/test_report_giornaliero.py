@@ -210,7 +210,7 @@ def test_regole_leggono_importo_eventi(monkeypatch):
 
 # ─── Pagina completa su dati sintetici ───────────────────────────────────────
 
-def test_pagina_completa():
+def _pagina_di_prova(password):
     p = G.allinea_valuta(_pos(isin="IE000TEST", name="ETF di prova", yf_symbol="MIL:TEST", symbol="TEST",
                               giorni_detenzione=None, data_apertura_motivo="motivo di prova"),
                          "USD", {("USD", "EUR"): (1 / 1.1244, "FX_IDC:USDEUR")})
@@ -221,8 +221,12 @@ def test_pagina_completa():
     editor = [{"isin": "IE000TEST", "symbol": "MIL:TEST", "name": "ETF di prova", "type": "ETF",
                "stop": 6.0, "target": None, "tesi": "</script><b>x</b>", "revisione": None,
                "data_apertura": None, "eventi": [{"tipo": CAL.STACCO, "data": "2026-11-15", "importo": 0.1}]}]
-    pagina = G.build_html([], [], [], [p], {"S&P 500": 0.1, "NASDAQ": None, "Eurostoxx 50": 0.2, "FTSE MIB": 0.3},
-                          {}, "hash", regole_map, voci, [], editor)
+    return G.build_html([], [], [], [p], {"S&P 500": 0.1, "NASDAQ": None, "Eurostoxx 50": 0.2, "FTSE MIB": 0.3},
+                        {}, password, regole_map, voci, [], editor), editor
+
+
+def test_pagina_completa():
+    pagina, _ = _pagina_di_prova("")
     assert "6.40 EUR" in pagina and "ev-lista-0" in pagina and "apertura-0" in pagina
     assert "aggiungiEvento" in pagina and "Dettaglio" in pagina
     assert "</script><b>" not in pagina                       # il JSON non chiude lo <script>
@@ -292,3 +296,63 @@ def test_indici_primo_candidato_disponibile():
                                 {"s": "INDEX:FTSEMIB", "d": [None]}])
     assert out == {"S&P 500": 0.5, "NASDAQ": -1.23, "Eurostoxx 50": None, "FTSE MIB": None}
     assert "non restituito" in G.idx_badge(None)
+
+
+# ─── Sicurezza: pagina cifrata ───────────────────────────────────────────────
+
+import json
+import re
+
+import cifra_pagina
+
+
+def test_pagina_con_password_senza_dati_in_chiaro(monkeypatch):
+    monkeypatch.setattr(cifra_pagina, "ITERAZIONI", 1000)          # test veloce
+    pagina, editor = _pagina_di_prova("una passphrase lunga di prova")
+    for in_chiaro in ("IE000TEST", "ETF di prova", "6.40", "MIL:TEST", "</script><b>"):
+        assert in_chiaro not in pagina
+    import hashlib
+    assert "const HASH" not in pagina
+    assert hashlib.sha256("una passphrase lunga di prova".encode()).hexdigest() not in pagina
+    blob = json.loads(re.search(r"const CIFRATO = (\{.*?\});</script>", pagina).group(1))
+    dati = cifra_pagina.decifra(blob, "una passphrase lunga di prova")
+    assert "6.40 EUR" in dati["html"] and dati["regole"] == editor
+    try:
+        cifra_pagina.decifra(blob, "password sbagliata")
+        raise AssertionError("decifrata con la password sbagliata")
+    except Exception as e:
+        assert type(e).__name__ == "InvalidTag"
+
+
+def test_niente_pubblicazione_in_chiaro_su_github(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("SITE_PASSWORD", "")
+    monkeypatch.setattr(G, "get_indices", lambda: {})
+    for fn in ("screen_italy", "screen_usa", "screen_etfs", "get_portfolio_data"):
+        monkeypatch.setattr(G, fn, lambda: [])
+    monkeypatch.setattr(G, "generate_analysis", lambda *a, **k: {})
+    monkeypatch.setattr(G.cal, "scarica_automatici", lambda *a, **k: {})
+    monkeypatch.setattr(G.storico, "record_daily", lambda *a, **k: None)
+    monkeypatch.setattr(G, "enrich_storico_esteso", lambda rows, *a, **k: rows)
+    monkeypatch.setattr(G, "get_watchlist_data", lambda w: [])
+    try:
+        G.main()
+        raise AssertionError("pagina pubblicata senza password")
+    except SystemExit as e:
+        assert "SITE_PASSWORD" in str(e)
+
+
+def test_javascript_della_pagina_valido(tmp_path, monkeypatch):
+    import shutil
+    import subprocess
+    import pytest
+    if not shutil.which("node"):
+        pytest.skip("node non disponibile")
+    monkeypatch.setattr(cifra_pagina, "ITERAZIONI", 1000)
+    for password in ("", "una passphrase lunga di prova"):
+        pagina, _ = _pagina_di_prova(password)
+        for i, js in enumerate(re.findall(r"<script>(.*?)</script>", pagina, re.S)):
+            f = tmp_path / f"s{i}.js"
+            f.write_text(js, encoding="utf-8")
+            r = subprocess.run(["node", "--check", str(f)], capture_output=True, text=True)
+            assert r.returncode == 0, r.stderr
