@@ -822,6 +822,17 @@ def allinea_valuta(p, valuta_dato, cambi):
     return p
 
 
+def motivo_simbolo_non_risolto(sym):
+    """Perche' un ticker configurato non ha dati: da mostrare nella riga,
+    invece di lasciare una serie di n.d. senza spiegazione."""
+    if not sym:
+        return "nessun ticker TradingView indicato: inseriscilo qui sotto"
+    if ":" not in sym:
+        return (f"«{sym}» non e' nel formato TradingView BORSA:TICKER (es. NASDAQ:SNY, MIL:ISP): "
+                "correggilo qui sotto e salva")
+    return f"«{sym}» non trovato su TradingView: controlla borsa e ticker"
+
+
 def get_portfolio_data():
     """Recupera dati tecnici del portafoglio via TradingView screener.
     Accetta 'EXCHANGE:TICKER' oppure solo 'TICKER'.
@@ -865,7 +876,7 @@ def get_portfolio_data():
             # Niente ticker reali nel log: e' un repo pubblico, il log lo e' con lui.
             logger.warning("Portfolio: dati non trovati per una posizione")
             parsed = {
-                "symbol": ticker, "yf_symbol": sym,
+                "symbol": ticker, "yf_symbol": sym, "simbolo_errore": motivo_simbolo_non_risolto(sym),
                 "name": item.get("name", sym), "type": item.get("type", "Azione"),
                 "price": None, "rsi": None, "trend": "n.d.",
                 "macd_str": "n.d.", "macd_hist": 0,
@@ -875,6 +886,7 @@ def get_portfolio_data():
             }
         # Campi ricostruiti dal dossier XLS (portfolio_sync): assenti se il
         # portafoglio arriva ancora dal vecchio secret PORTFOLIO_JSON.
+        parsed["ticker_confermato"] = item.get("ticker_confermato", True)
         parsed["isin"]              = item.get("isin")
         parsed["titolo"]            = item.get("titolo")
         parsed["quantita"]          = item.get("quantita")
@@ -925,30 +937,43 @@ def get_watchlist_data(watchlist):
     return out
 
 # ─── INDICI DI MERCATO ────────────────────────────────────────────────────────
-# Simboli TradingView per gli indici principali
+# Simboli TradingView per gli indici principali, in ordine di preferenza: vince
+# il primo che lo screener restituisce. "NASDAQ:COMP" da solo restituiva
+# sempre n.d.; il Composite su TradingView e' IXIC.
 INDICES_TV = {
-    "S&P 500":      "SP:SPX",
-    "NASDAQ":       "NASDAQ:COMP",
-    "Eurostoxx 50": "TVC:SX5E",
-    "FTSE MIB":     "INDEX:FTSEMIB",
+    "S&P 500":      ["SP:SPX"],
+    "NASDAQ":       ["NASDAQ:IXIC", "TVC:IXIC", "NASDAQ:COMP"],
+    "Eurostoxx 50": ["TVC:SX5E"],
+    "FTSE MIB":     ["INDEX:FTSEMIB"],
 }
+
+
+def indici_da_risposta(righe):
+    """{nome indice: variazione %} dalle righe dello screener, scegliendo per
+    ogni indice il primo simbolo candidato presente. None se nessuno."""
+    per_simbolo = {}
+    for row in righe or []:
+        chg = (row.get("d") or [None])[0]
+        if chg is not None:
+            per_simbolo[row.get("s", "")] = round(chg, 2)
+    return {nome: next((per_simbolo[c] for c in candidati if c in per_simbolo), None)
+            for nome, candidati in INDICES_TV.items()}
+
 
 def get_indices():
     """Recupera variazione % degli indici via TradingView screener (nessuna dipendenza da Yahoo)."""
-    out = {name: None for name in INDICES_TV}
     try:
-        syms = list(INDICES_TV.values())
+        syms = [c for candidati in INDICES_TV.values() for c in candidati]
         data = tv_request("https://scanner.tradingview.com/global/scan",
                           {"symbols": {"tickers": syms}, "columns": ["change"]})
-        by_tv = {v: k for k, v in INDICES_TV.items()}
-        for row in (data.get("data") or []):
-            s   = row.get("s", "")
-            chg = (row.get("d") or [None])[0]
-            name = by_tv.get(s)
-            if name and chg is not None:
-                out[name] = round(chg, 2)
+        out = indici_da_risposta(data.get("data"))
     except Exception as e:
         logger.warning(f"Indices TV fetch: {e}")
+        out = {name: None for name in INDICES_TV}
+    mancanti = [k for k, v in out.items() if v is None]
+    if mancanti:
+        # Nomi degli indici, non dati personali: si possono loggare.
+        logger.warning(f"Indici senza dato da TradingView: {', '.join(mancanti)}")
     return out
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
@@ -1238,7 +1263,8 @@ def detect_pattern(r):
 
 def idx_badge(val):
     if val is None:
-        return '<span style="color:#999">n.d.</span>'
+        return ('<span style="color:#999" title="TradingView non ha restituito la variazione di oggi per '
+                'questo indice">n.d.</span><div style="color:#999;font-size:11px">non restituito da TradingView</div>')
     color = "#16a34a" if val >= 0 else "#dc2626"
     sign = "+" if val >= 0 else ""
     return f'<span style="color:{color};font-weight:700">{sign}{val:.2f}%</span>'
@@ -1335,6 +1361,8 @@ def prezzo_html(p):
     if stato == "cambio_mancante":
         return ('<span style="color:#999">n.d.</span>'
                 + _NOTA.format(f"dato in {p['valuta_origine']}, carico in {divisa}: cambio non disponibile"))
+    if p.get("simbolo_errore"):
+        return '<span style="color:#999">n.d.</span>' + _NOTA.format("ticker non valido, vedi a sinistra")
     if not price:
         return '<span style="color:#999">n.d.</span>'
     if stato == "convertita":
@@ -1345,6 +1373,15 @@ def prezzo_html(p):
         return (f"{price:.2f} {html.escape(p.get('valuta_prezzo') or '')}"
                 + _NOTA.format("⚠ valuta del dato non verificata"))
     return f"{price:.2f} {p.get('valuta_prezzo') or divisa}"
+
+
+def stato_ticker_html(p):
+    """Errore del ticker in evidenza, o avviso se e' solo un suggerimento."""
+    if p.get("simbolo_errore"):
+        return f'<br><span style="color:#dc2626;font-size:11px;font-weight:600">⚠ {html.escape(p["simbolo_errore"])}</span>'
+    if p.get("ticker_confermato") is False:
+        return _NOTA.format("ticker suggerito dal simbolo del broker, non ancora confermato: verificalo e salva")
+    return ""
 
 
 def var_da_carico_html(price, prezzo_medio, valuta_stato=None):
@@ -1570,7 +1607,7 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
             tesi_field = f'<div style="color:#444;font-size:12px">{tesi_html}</div>'
 
         rows += f"""<tr>
-            <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{ticker_input}</td>
+            <td><strong>{html.escape(nome)}</strong><br><span style="color:#999;font-size:11px">{html.escape(simbolo)}</span>{stato_ticker_html(p)}{ticker_input}</td>
             <td>{prezzo_html(p)}</td>
             <td>{var_da_carico_html(price, p.get('prezzo_medio'), p.get('valuta_stato'))}</td>
             <td>{giorni_detenzione_html(p.get('giorni_detenzione'), p.get('data_apertura'), p.get('tranche'),
@@ -1617,7 +1654,8 @@ def _segnale_badge(tipo):
 def _formatta_dettaglio_segnale(s):
     tipo = s.get("tipo", "")
     if tipo in ("Doppio massimo", "Doppio minimo"):
-        return (f"Picchi del {s['data_picco1'].strftime('%d/%m/%Y')} e {s['data_picco2'].strftime('%d/%m/%Y')}, "
+        estremi = "Massimi" if tipo == "Doppio massimo" else "Minimi"
+        return (f"{estremi} del {s['data_primo'].strftime('%d/%m/%Y')} e {s['data_secondo'].strftime('%d/%m/%Y')}, "
                 f"distanza {s['distanza_pct']}%. Livello di conferma: {s['livello_conferma']}.")
     if "Divergenza" in tipo:
         return (f"{s['prezzo'].capitalize()} tra il {s['data_primo'].strftime('%d/%m/%Y')} "
@@ -1625,8 +1663,7 @@ def _formatta_dettaglio_segnale(s):
     if "Rottura" in tipo:
         return f"Il {s['data'].strftime('%d/%m/%Y')}, livello precedente {s['livello_precedente']}."
     if tipo in ("Golden cross", "Death cross"):
-        durata = f"{s['giorni_da_incrocio']}gg" if s["certo"] else f"almeno {s['giorni_da_incrocio']}gg"
-        return f"EMA50/200 su candele settimanali, da {durata}."
+        return f"EMA50/200 su candele settimanali, incrocio {s['giorni_da_incrocio']} giorni fa."
     if tipo == "Volume anomalo":
         return f"Il {s['data'].strftime('%d/%m/%Y')}, {s['rapporto']}x la media a 50 giorni."
     return ""

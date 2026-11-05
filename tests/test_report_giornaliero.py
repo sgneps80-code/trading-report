@@ -238,3 +238,57 @@ def test_tabella_etf_senza_rec_e_ordinata_per_3m():
     pagina = G.build_html([], [], etf, [], {}, {}, "", {}, [], [], [])
     assert "<th>Rec.</th>" not in pagina and "performance a 3 mesi" in pagina
     assert not hasattr(G, "etp_reco_badge") and not hasattr(G, "etp_total_score")
+
+
+# ─── Bug 5: segnali di medio periodo, simboli, indici ────────────────────────
+
+import segnali_medio_periodo as SMP
+
+
+def test_doppio_minimo_parla_di_minimi():
+    s = {"tipo": "Doppio minimo", "data_primo": date(2026, 5, 29), "data_secondo": date(2026, 8, 28),
+         "distanza_pct": 1.2, "livello_conferma": 10.5}
+    testo = G._formatta_dettaglio_segnale(s)
+    assert testo.startswith("Minimi del 29/05/2026 e 28/08/2026") and "Picchi" not in testo
+    assert G._formatta_dettaglio_segnale(dict(s, tipo="Doppio massimo")).startswith("Massimi del")
+
+
+def _settimane(chiusure):
+    inizio = date.today() - timedelta(weeks=len(chiusure) - 1)       # l'ultima settimana e' questa
+    return [{"data": inizio + timedelta(weeks=i), "o": c, "h": c, "l": c, "c": c} for i, c in enumerate(chiusure)]
+
+
+def test_cross_al_bordo_della_finestra_omesso():
+    # 260 settimane sempre in salita: EMA50 > EMA200 da quando l'EMA200 esiste
+    assert SMP.cross_settimanale(_settimane([10 + i * 0.1 for i in range(260)])) is None
+
+
+def test_cross_recente_mostrato_con_data_vera():
+    # 230 settimane in discesa, poi rialzo forte: incrocio dentro la finestra
+    chiusure = [100 - i * 0.2 for i in range(230)] + [54 + i * 3 for i in range(40)]
+    s = SMP.cross_settimanale(_settimane(chiusure))
+    assert s is not None and s["tipo"] == "Golden cross" and s["certo"]
+    assert "almeno" not in G._formatta_dettaglio_segnale(s)
+
+
+def test_simbolo_reuters_tradotto():
+    assert PS.guess_tv_symbol("SNY.O") == "NASDAQ:SNY"
+    assert PS.guess_tv_symbol("IBM.N") == "NYSE:IBM"
+    assert PS.guess_tv_symbol("ISP.MI") == "MIL:ISP"
+    assert G.tv_to_yahoo_symbol("NASDAQ:SNY") == "SNY"
+
+
+def test_simbolo_non_risolto_spiegato():
+    assert "formato TradingView" in G.motivo_simbolo_non_risolto("SNY.O")
+    assert "non trovato" in G.motivo_simbolo_non_risolto("NASDAQ:XXXX")
+    p = {"name": "Sanofi", "yf_symbol": "SNY.O", "price": None, "isin": "US0000",
+         "simbolo_errore": G.motivo_simbolo_non_risolto("SNY.O")}
+    riga = G.posizioni_rows([p], {})
+    assert "⚠" in riga and "NASDAQ:SNY" in riga
+
+
+def test_indici_primo_candidato_disponibile():
+    out = G.indici_da_risposta([{"s": "SP:SPX", "d": [0.5]}, {"s": "TVC:IXIC", "d": [-1.234]},
+                                {"s": "INDEX:FTSEMIB", "d": [None]}])
+    assert out == {"S&P 500": 0.5, "NASDAQ": -1.23, "Eurostoxx 50": None, "FTSE MIB": None}
+    assert "non restituito" in G.idx_badge(None)

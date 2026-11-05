@@ -99,9 +99,12 @@ _HEADER_SINTESI = {
 # Suffisso stile Yahoo/broker (es. "ISP.MI") -> prefisso exchange TradingView.
 # Serve solo a suggerire un ticker di partenza nell'editor: l'utente lo
 # corregge se sbagliato, non viene mai usato come dato certo.
+# "O"/"OQ"/"N" sono i suffissi Reuters per Nasdaq e NYSE (es. "SNY.O"), usati
+# da alcuni broker per i titoli USA.
 _SUFFISSO_A_EXCHANGE_TV = {
     "MI": "MIL", "PA": "EURONEXT", "AS": "EURONEXT", "BR": "EURONEXT", "LS": "EURONEXT",
     "DE": "XETR", "F": "FWB", "L": "LSE", "SW": "XSWX", "MC": "BME",
+    "O": "NASDAQ", "OQ": "NASDAQ", "N": "NYSE",
 }
 
 
@@ -543,6 +546,8 @@ def sync_portfolio():
         symbol = (mapped or {}).get("tv_symbol") or guess_tv_symbol(p.get("simbolo_broker")) or p["isin"]
         out.append({
             "symbol": symbol,
+            # False = ticker solo suggerito dal simbolo broker, mai confermato nell'editor
+            "ticker_confermato": bool((mapped or {}).get("tv_symbol")),
             "name": (mapped or {}).get("name", p["titolo"]),
             "type": (mapped or {}).get("type", p.get("tipo_broker", "Azione")),
             "isin": p["isin"],
