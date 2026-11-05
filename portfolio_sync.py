@@ -546,6 +546,7 @@ def sync_portfolio():
             "name": (mapped or {}).get("name", p["titolo"]),
             "type": (mapped or {}).get("type", p.get("tipo_broker", "Azione")),
             "isin": p["isin"],
+            "titolo": p["titolo"],
             "quantita": p["quantita"],
             "prezzo_medio": p["prezzo_medio"],
             "divisa": p["divisa"],

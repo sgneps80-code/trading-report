@@ -15,6 +15,7 @@ import regole
 import storico
 import indicatori_storici
 import segnali_medio_periodo
+import calendario as cal
 import analisi_ui
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -933,6 +934,7 @@ def get_portfolio_data():
         # Campi ricostruiti dal dossier XLS (portfolio_sync): assenti se il
         # portafoglio arriva ancora dal vecchio secret PORTFOLIO_JSON.
         parsed["isin"]              = item.get("isin")
+        parsed["titolo"]            = item.get("titolo")
         parsed["quantita"]          = item.get("quantita")
         parsed["prezzo_medio"]      = item.get("prezzo_medio")
         parsed["divisa"]            = item.get("divisa")
@@ -1006,25 +1008,6 @@ def get_indices():
     except Exception as e:
         logger.warning(f"Indices TV fetch: {e}")
     return out
-
-# ─── CALENDARIO (Sezione 2) ───────────────────────────────────────────────────
-def build_calendario(portfolio, regole_map, eventi_macro, giorni=60):
-    """Unisce le riunioni BCE/Fed e gli eventi per-titolo scritti a mano nelle
-    regole delle posizioni aperte, filtrati sui prossimi N giorni e ordinati
-    cronologicamente. Non include eventi per titoli fuori portafoglio: la
-    watchlist configurabile arriva in Fase 5."""
-    oggi = date.today()
-    limite = oggi + timedelta(days=giorni)
-    voci = [e for e in eventi_macro if oggi <= e["data"] <= limite]
-    for p in portfolio:
-        isin = p.get("isin")
-        nome = p.get("name", isin)
-        regola = regole_map.get(isin) or {}
-        for ev in regola.get("eventi", []):
-            if oggi <= ev["data"] <= limite:
-                voci.append({"data": ev["data"], "titolo": nome, "tipo": ev.get("tipo", "evento")})
-    voci.sort(key=lambda v: v["data"])
-    return voci
 
 # ─── ANALISI CLAUDE ──────────────────────────────────────────────────────────
 
@@ -1518,18 +1501,34 @@ def trend_ema_html(sopra, giorni, certo, label):
         durata = f" ({giorni}gg)" if certo else f" (almeno {giorni}gg)"
     return f'<span style="color:{color};font-weight:600;white-space:nowrap">{freccia} {stato} {label}{durata}</span>'
 
-def eventi_prossimi_html(eventi, giorni_max=30):
-    oggi = date.today()
-    prossimi = sorted(
-        (e for e in (eventi or []) if 0 <= (e["data"] - oggi).days <= giorni_max),
-        key=lambda e: e["data"]
-    )
+def effetto_evento_html(v):
+    """Per gli stacchi: importo ed effetto meccanico atteso sul prezzo, o il
+    motivo per cui non e' calcolabile. Vuoto per gli altri eventi."""
+    if v.get("tipo") != cal.STACCO:
+        return ""
+    if not v.get("importo"):
+        return "importo n.d.: aggiungilo nella riga della posizione per vedere l'effetto sul prezzo"
+    testo = f"−{v['importo']:g} {v.get('valuta') or ''} per azione".replace("  ", " ")
+    if v.get("effetto_pct") is not None:
+        testo += f" ({v['effetto_pct']:.1f}% sul prezzo attuale): calo meccanico, non un segnale di mercato"
+    return testo
+
+
+def eventi_prossimi_html(voci, giorni_max=30, oggi=None):
+    """Colonna "Eventi (30gg)": le voci del calendario di questa posizione."""
+    oggi = oggi or date.today()
+    prossimi = [v for v in (voci or []) if 0 <= (v["data"] - oggi).days <= giorni_max]
     if not prossimi:
         return '<span style="color:#999;font-size:12px">nessuno nei prossimi 30gg</span>'
-    return "<br>".join(
-        f'<span style="font-size:12px">{e["tipo"]} — {e["data"].strftime("%d/%m")}</span>'
-        for e in prossimi
-    )
+    righe = []
+    for v in prossimi:
+        riga = f'<span style="font-size:12px">{html.escape(v["tipo"])} — {v["data"].strftime("%d/%m")}</span>'
+        effetto = effetto_evento_html(v)
+        if effetto:
+            colore = "#b45309" if v.get("importo") else "#999"
+            riga += f'<br><span style="font-size:11px;color:{colore}">{html.escape(effetto)}</span>'
+        righe.append(riga)
+    return "<br>".join(righe)
 
 def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
     """Domande/osservazioni fattuali, non giudizi: confronta lo stato attuale
@@ -1568,7 +1567,9 @@ def note_fattuali_html(p, regola, cambiamento=None, contraddizione=None):
         return '<span style="color:#999;font-size:12px">—</span>'
     return "<br>".join(righe)
 
-def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None, editor_idx_by_isin=None):
+def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_map=None, editor_idx_by_isin=None,
+                   calendario=None):
+    calendario = calendario or []
     cambiamenti_map = cambiamenti_map or {}
     contraddizioni_map = contraddizioni_map or {}
     editor_idx_by_isin = editor_idx_by_isin or {}
@@ -1631,6 +1632,15 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
                             f'style="width:80px;{mini}">')
             rev_input = (f'<br><input id="rev-{idx}" type="date" title="Data in cui vuoi rivedere la tesi (facoltativo)" '
                         f'value="{revisione.isoformat() if revisione else ""}" style="{mini}">')
+            opzioni = "".join(f'<option>{html.escape(t)}</option>' for t in cal.TIPI)
+            eventi_input = (
+                f'<div style="margin-top:6px;font-size:11px;color:#666">Eventi inseriti a mano:</div>'
+                f'<div id="ev-lista-{idx}" style="font-size:11px"></div>'
+                f'<select id="ev-tipo-{idx}" style="{mini};width:150px">{opzioni}</select>'
+                f'<br><input id="ev-data-{idx}" type="date" style="{mini}">'
+                f'<input id="ev-imp-{idx}" type="number" step="0.0001" min="0" placeholder="importo (stacchi)" '
+                f'style="width:110px;{mini}">'
+                f'<button type="button" onclick="aggiungiEvento({idx})" style="{mini};cursor:pointer">+ aggiungi</button>')
             apertura_manuale = regola.get("data_apertura")
             apertura_input = (f'<br><input id="apertura-{idx}" type="date" '
                               f'title="Data del primo acquisto ancora in essere: usata solo se lo storico movimenti non la ricava" '
@@ -1638,7 +1648,7 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
             tesi_field = (f'<input id="tesi-{idx}" value="{html.escape(tesi)}" '
                          f'placeholder="perché tieni questa posizione" style="width:100%;{mini}">')
         else:
-            ticker_input = stop_input = target_input = rev_input = apertura_input = ""
+            ticker_input = stop_input = target_input = rev_input = apertura_input = eventi_input = ""
             tesi_html = html.escape(tesi) if tesi else '<span style="color:#999">nessuna tesi scritta</span>'
             tesi_field = f'<div style="color:#444;font-size:12px">{tesi_html}</div>'
 
@@ -1651,7 +1661,7 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
             <td>{distanza_da_livello_html(price, regola.get('stop'), verso_alto=False)}{stop_input}</td>
             <td>{distanza_da_livello_html(price, regola.get('target'), verso_alto=True)}{target_input}</td>
             <td>{trend_ema_html(sopra50, g50, certo50, "EMA50")}<br>{trend_ema_html(sopra200, g200, certo200, "EMA200")}</td>
-            <td>{eventi_prossimi_html(regola.get('eventi'))}{rev_input}</td>
+            <td>{eventi_prossimi_html([v for v in calendario if v.get("isin") == isin])}{eventi_input}{rev_input}</td>
             <td>{note_fattuali_html(p, regola, cambiamento, contraddizione)}</td>
             <td class="wrap">{tesi_field}</td>
         </tr>"""
@@ -1659,13 +1669,16 @@ def posizioni_rows(portfolio, regole_map, cambiamenti_map=None, contraddizioni_m
 
 def calendario_rows(voci):
     if not voci:
-        return '<tr><td colspan="3" style="text-align:center;color:#999;padding:20px">Nessun evento nei prossimi 60 giorni.</td></tr>'
+        return '<tr><td colspan="5" style="text-align:center;color:#999;padding:20px">Nessun evento nei prossimi 60 giorni.</td></tr>'
     rows = ""
     for v in voci:
+        dettaglio = " — ".join(x for x in (effetto_evento_html(v), v.get("nota") or "") if x)
         rows += f"""<tr>
             <td style="white-space:nowrap">{v['data'].strftime('%d/%m/%Y')}</td>
-            <td>{v['tipo']}</td>
-            <td>{v['titolo']}</td>
+            <td>{html.escape(v['tipo'])}</td>
+            <td>{html.escape(v['titolo'] or '')}</td>
+            <td class="wrap" style="font-size:12px">{html.escape(dettaglio)}</td>
+            <td style="font-size:11px;color:#999">{html.escape(v.get('fonte') or '')}</td>
         </tr>"""
     return rows
 
@@ -1735,7 +1748,9 @@ def _analysis_map(items):
 def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, password_hash="",
                regole_map=None, calendario=None, segnali_items=None, regole_editor_data=None):
     regole_map = regole_map or {}
-    regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False)
+    # "</" spezzato: un testo scritto dall'utente (tesi, note) non deve poter
+    # chiudere il tag <script> in cui questo JSON viene inserito.
+    regole_editor_json = json.dumps(regole_editor_data or [], ensure_ascii=False).replace("</", "<\\/")
     calendario = calendario or []
     segnali_items = segnali_items or []
     # Il run schedulato parte a mercati USA chiusi (22:30 italiane): la
@@ -1888,6 +1903,44 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
     if (el) {{ el.textContent = msg; el.style.color = color; }}
   }}
 
+  // ─── Eventi inseriti a mano nella riga della posizione ─────────────────────
+  // Solo nodi DOM e textContent: i testi vengono dall'utente, mai innerHTML.
+  function renderEventi(i) {{
+    const box = document.getElementById("ev-lista-" + i);
+    if (!box) return;
+    box.replaceChildren();
+    const eventi = REGOLE_ATTUALI[i].eventi || [];
+    if (!eventi.length) {{ box.textContent = "nessuno"; box.style.color = "#999"; return; }}
+    box.style.color = "";
+    eventi.forEach((e, j) => {{
+      const riga = document.createElement("div");
+      const imp = (e.importo !== null && e.importo !== undefined && e.importo !== "") ? " · " + e.importo : "";
+      riga.textContent = e.data.split("-").reverse().join("/") + " " + e.tipo + imp + " ";
+      const x = document.createElement("button");
+      x.type = "button"; x.textContent = "✕"; x.title = "Rimuovi (poi salva le regole)";
+      x.style.cssText = "border:none;background:none;color:#dc2626;cursor:pointer;padding:0 2px";
+      x.onclick = () => {{ eventi.splice(j, 1); renderEventi(i); }};
+      riga.appendChild(x);
+      box.appendChild(riga);
+    }});
+  }}
+
+  function aggiungiEvento(i) {{
+    const tipo = document.getElementById("ev-tipo-" + i).value;
+    const data = document.getElementById("ev-data-" + i).value;
+    const imp  = (document.getElementById("ev-imp-" + i).value || "").trim();
+    if (!data) {{ setSyncStatus("⚠️ Indica la data dell'evento", "#d97706", "regole-status"); return; }}
+    const ev = {{tipo: tipo, data: data}};
+    if (imp) ev.importo = parseFloat(imp);
+    REGOLE_ATTUALI[i].eventi = (REGOLE_ATTUALI[i].eventi || []).concat([ev]);
+    document.getElementById("ev-data-" + i).value = "";
+    document.getElementById("ev-imp-" + i).value = "";
+    renderEventi(i);
+    setSyncStatus("Evento aggiunto: premi «Salva regole» per registrarlo", "#2563eb", "regole-status");
+  }}
+
+  REGOLE_ATTUALI.forEach((r, i) => renderEventi(i));
+
   async function salvaRegolePosizioni(btn) {{
     const isinMap = {{}};
     const regole = {{}};
@@ -2002,7 +2055,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
         <th>Distanza da stop</th><th>Distanza da target</th><th>Trend medio periodo</th>
         <th>Eventi (30gg) / Revisione</th><th>Da notare</th><th>Tesi scritta</th>
       </tr></thead>
-      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx, editor_idx_by_isin)}</tbody>
+      <tbody>{posizioni_rows(portfolio, regole_map, cm, cx, editor_idx_by_isin, calendario)}</tbody>
     </table>
     </div>
     <p class="empty-note">Nessun badge di raccomandazione: solo fatti confrontati con quello che hai scritto qui sopra. La decisione resta tua.</p>
@@ -2017,7 +2070,7 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   <div class="section">
     <h2>Calendario <span class="badge-count">prossimi 60 giorni</span></h2>
     <table>
-      <thead><tr><th>Data</th><th>Tipo</th><th>Titolo</th></tr></thead>
+      <thead><tr><th>Data</th><th>Tipo</th><th>Titolo</th><th>Dettaglio</th><th>Fonte</th></tr></thead>
       <tbody>{calendario_rows(calendario)}</tbody>
     </table>
   </div>
@@ -2163,7 +2216,9 @@ def main():
     regole_map = regole.load_regole()
     applica_data_manuale(portfolio, regole_map)
     eventi_macro = regole.load_eventi_macro()
-    calendario = build_calendario(portfolio, regole_map, eventi_macro)
+    eventi_auto = cal.scarica_automatici(
+        portfolio, lambda p: tv_to_yahoo_symbol(p.get("yf_symbol") or p.get("symbol")))
+    calendario = cal.costruisci(portfolio, regole_map, eventi_macro, eventi_auto)
     watchlist_data = get_watchlist_data(regole.load_watchlist())
     enrich_storico_esteso(watchlist_data, "watchlist")
 
@@ -2203,7 +2258,8 @@ def main():
             "tesi": regola.get("tesi") or "",
             "revisione": regola["revisione"].isoformat() if regola.get("revisione") else None,
             "data_apertura": regola["data_apertura"].isoformat() if regola.get("data_apertura") else None,
-            "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat()} for e in regola.get("eventi", [])],
+            "eventi": [{"tipo": e["tipo"], "data": e["data"].isoformat(), "importo": e.get("importo"),
+                        "nota": e.get("nota") or ""} for e in regola.get("eventi", [])],
         })
     html = build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, pwd_hash,
                        regole_map, calendario, segnali_items, regole_editor_data)

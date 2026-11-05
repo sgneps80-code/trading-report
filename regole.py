@@ -96,7 +96,14 @@ def load_regole(path=None):
                 continue
             d = _parse_date(ev.get("data"))
             if d:
-                eventi.append({"tipo": ev.get("tipo", "evento"), "data": d})
+                importo = ev.get("importo")
+                try:
+                    importo = float(importo) if importo not in (None, "") else None
+                except (TypeError, ValueError):
+                    logger.warning(f"Importo evento non valido ({importo!r}), ignorato")
+                    importo = None
+                eventi.append({"tipo": ev.get("tipo", "evento"), "data": d, "importo": importo,
+                               "nota": str(ev.get("nota") or "")})
         out[str(isin)] = {
             "stop": r.get("stop"),
             "target": r.get("target"),

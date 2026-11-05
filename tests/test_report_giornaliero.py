@@ -142,3 +142,87 @@ def test_giorni_html_fasce_tranche_e_motivo():
 def test_regole_leggono_data_apertura(monkeypatch):
     monkeypatch.setattr(regole, "REGOLE_POSIZIONI_YAML", '{"A": {"stop": 1, "data_apertura": "2026-08-17"}}')
     assert regole.load_regole()["A"]["data_apertura"] == date(2026, 8, 17)
+
+
+# ─── Bug 3: calendario ───────────────────────────────────────────────────────
+
+import calendario as CAL
+
+OGGI = date(2026, 11, 5)
+
+
+def _portafoglio_cal():
+    return [{"isin": "ISP", "name": "Intesa Sanpaolo", "price": 6.30, "divisa": "EUR", "valuta_prezzo": "EUR"},
+            {"isin": "OMER", "name": "Omer", "price": 3.40, "divisa": "EUR"},
+            {"isin": "CERT", "name": "FBK FIXLEV -4x SH OIL 23/11/2026", "price": 10.0, "divisa": "EUR"}]
+
+
+def test_calendario_unisce_manuali_automatici_macro():
+    regole_map = {
+        "ISP": {"eventi": [{"tipo": CAL.ULTIMO_GIORNO_DIRITTO, "data": date(2026, 11, 20), "importo": None},
+                           {"tipo": CAL.STACCO, "data": date(2026, 11, 23), "importo": 0.22}]},
+        "OMER": {"eventi": [{"tipo": CAL.TRIMESTRALE, "data": date(2026, 11, 16), "nota": "dati Q3"}]},
+    }
+    macro = [{"data": date(2026, 12, 9), "titolo": "Riunione Fed (FOMC)", "tipo": "Macro"},
+             {"data": date(2026, 12, 17), "titolo": "Riunione BCE", "tipo": "Macro"}]
+    auto = {"ISP": [{"data": date(2026, 11, 24), "tipo": CAL.STACCO, "fonte": "Yahoo"},     # doppione del manuale
+                    {"data": date(2027, 2, 4), "tipo": CAL.TRIMESTRALE, "fonte": "Yahoo"}],  # oltre 60gg
+            "OMER": [{"data": date(2026, 12, 1), "tipo": CAL.STACCO, "fonte": "Yahoo"}]}
+    voci = CAL.costruisci(_portafoglio_cal(), regole_map, macro, auto, oggi=OGGI)
+    sintesi = [(v["data"], v["tipo"], v["titolo"], v["fonte"]) for v in voci]
+    assert sintesi == [
+        (date(2026, 11, 16), CAL.TRIMESTRALE, "Omer", "inserito a mano"),
+        (date(2026, 11, 20), CAL.ULTIMO_GIORNO_DIRITTO, "Intesa Sanpaolo", "inserito a mano"),
+        (date(2026, 11, 23), CAL.SCADENZA_CERTIFICATO, "FBK FIXLEV -4x SH OIL 23/11/2026", "dal nome"),
+        (date(2026, 11, 23), CAL.STACCO, "Intesa Sanpaolo", "inserito a mano"),
+        (date(2026, 12, 1), CAL.STACCO, "Omer", "Yahoo"),
+        (date(2026, 12, 9), "Macro", "Riunione Fed (FOMC)", "Macro"),
+        (date(2026, 12, 17), "Macro", "Riunione BCE", "Macro"),
+    ]
+    stacco_isp = voci[3]
+    assert abs(stacco_isp["effetto_pct"] - (-0.22 / 6.30 * 100)) < 1e-9
+    testo = G.effetto_evento_html(stacco_isp)
+    assert "−0.22 EUR" in testo and "-3.5%" in testo and "non un segnale" in testo
+    assert "importo n.d." in G.effetto_evento_html(voci[4])
+
+
+def test_colonna_eventi_30gg_dal_calendario():
+    voci = [{"data": date(2026, 11, 23), "tipo": CAL.STACCO, "titolo": "Intesa", "isin": "ISP",
+             "importo": 0.22, "valuta": "EUR", "effetto_pct": -3.5},
+            {"data": date(2026, 12, 20), "tipo": CAL.TRIMESTRALE, "titolo": "Intesa", "isin": "ISP"}]
+    cella = G.eventi_prossimi_html(voci, oggi=OGGI)
+    assert "Stacco dividendo — 23/11" in cella and "-3.5%" in cella
+    assert "20/12" not in cella                              # oltre 30 giorni
+    assert "nessuno" in G.eventi_prossimi_html([], oggi=OGGI)
+
+
+def test_scadenza_dal_nome():
+    assert CAL.scadenza_da_nome("**FBK FIXLEV -4x SH OIL 23/09/2026") == date(2026, 9, 23)
+    assert CAL.scadenza_da_nome("Intesa Sanpaolo", None) is None
+
+
+def test_regole_leggono_importo_eventi(monkeypatch):
+    monkeypatch.setattr(regole, "REGOLE_POSIZIONI_YAML",
+                        '{"A": {"eventi": [{"tipo": "Stacco dividendo", "data": "2026-11-23", "importo": "0.22"}]}}')
+    (ev,) = regole.load_regole()["A"]["eventi"]
+    assert ev["importo"] == 0.22 and ev["data"] == date(2026, 11, 23)
+
+
+# ─── Pagina completa su dati sintetici ───────────────────────────────────────
+
+def test_pagina_completa():
+    p = G.allinea_valuta(_pos(isin="IE000TEST", name="ETF di prova", yf_symbol="MIL:TEST", symbol="TEST",
+                              giorni_detenzione=None, data_apertura_motivo="motivo di prova"),
+                         "USD", {("USD", "EUR"): (1 / 1.1244, "FX_IDC:USDEUR")})
+    regole_map = {"IE000TEST": {"stop": 6.0, "tesi": "</script><b>x</b>",
+                                "eventi": [{"tipo": CAL.STACCO, "data": date.today() + timedelta(days=10),
+                                            "importo": 0.1, "nota": ""}]}}
+    voci = CAL.costruisci([p], regole_map, [])
+    editor = [{"isin": "IE000TEST", "symbol": "MIL:TEST", "name": "ETF di prova", "type": "ETF",
+               "stop": 6.0, "target": None, "tesi": "</script><b>x</b>", "revisione": None,
+               "data_apertura": None, "eventi": [{"tipo": CAL.STACCO, "data": "2026-11-15", "importo": 0.1}]}]
+    pagina = G.build_html([], [], [], [p], {"S&P 500": 0.1, "NASDAQ": None, "Eurostoxx 50": 0.2, "FTSE MIB": 0.3},
+                          {}, "hash", regole_map, voci, [], editor)
+    assert "6.40 EUR" in pagina and "ev-lista-0" in pagina and "apertura-0" in pagina
+    assert "aggiungiEvento" in pagina and "Dettaglio" in pagina
+    assert "</script><b>" not in pagina                       # il JSON non chiude lo <script>
