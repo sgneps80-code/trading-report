@@ -406,67 +406,6 @@ def _passes_etp(r, min_price=1.0):
         return False
     return True
 
-def etp_score(r):
-    """Punteggio TECNICO (breve termine): trend + momentum + salute RSI, con freno ai blow-off."""
-    price  = r.get("price")     or 0
-    ema50  = r.get("ema50")     or 0
-    ema200 = r.get("ema200")    or 0
-    rsi    = r.get("rsi")       or 50
-    hist   = r.get("macd_hist") or 0
-    p1m    = r.get("perf_1m")   or 0
-    p3m    = r.get("perf_3m")   or 0
-
-    s = 0.0
-    # Struttura di trend
-    if ema200 and price > ema200:            s += 2.0
-    if ema50  and price > ema50:             s += 1.0
-    if ema50 and ema200 and ema50 > ema200:  s += 1.0   # golden alignment
-    # Momentum con rendimenti decrescenti (radice): non premia gli strappi estremi
-    s += (p3m ** 0.5 if p3m > 0 else 0) * 0.6
-    s += (p1m ** 0.5 if p1m > 0 else -abs(p1m) * 0.1)
-    # Conferma MACD
-    if hist > 0:
-        s += 1.0
-    # Salute RSI: premia 50-68, penalizza gli estremi
-    if   50 <= rsi <= 68: s += 1.0
-    elif 45 <= rsi < 50:  s += 0.3
-    elif rsi > 78:        s -= 1.0
-    elif rsi < 40:        s -= 0.5
-    return s
-
-def etp_cost_score(r):
-    """Punteggio COSTO/DIMENSIONE (strutturale): premia TER basso e masse ampie.
-
-    NEUTRO sui dati mancanti: la diagnostica ha mostrato che TradingView
-    valorizza expense_ratio ma spesso lascia aum a None, e Yahoo quoteSummary
-    ora risponde 401. Penalizzare un dato assente equivarrebbe a punire un ETF
-    solo perche' l'API non lo espone, quindi in quel caso non si assegna nulla.
-
-    NOTA sul formato: TradingView puo' esporre expense_ratio come percentuale
-    (0.20 = 0,20%) o come frazione (0.002). L'euristica sotto e' difensiva:
-    verifica il valore reale nei log e, se il formato e' stabile, semplificala."""
-    ter = r.get("expense_ratio")
-    aum = r.get("aum")
-    s = 0.0
-    if ter is not None:
-        ter_pct = ter * 100 if ter < 0.05 else ter    # euristica: <0.05 ⇒ frazione
-        if   ter_pct <= 0.15: s += 2.0
-        elif ter_pct <= 0.30: s += 1.5
-        elif ter_pct <= 0.50: s += 1.0
-        elif ter_pct <= 0.75: s += 0.3
-        else:                 s -= 1.0    # >0,75%: tipico dei prodotti a leva
-    if aum:                               # None o 0 ⇒ nessun punteggio, non penalita'
-        if   aum >= 500_000_000: s += 2.0
-        elif aum >= 100_000_000: s += 1.5
-        elif aum >=  20_000_000: s += 1.0
-        elif aum >=   5_000_000: s += 0.3
-        else:                    s -= 0.5  # davvero piccolo ⇒ spread ampio, rischio chiusura
-    return s
-
-def etp_total_score(r):
-    """Convenienza complessiva = tecnica (breve) + costo/dimensione (strutturale)."""
-    return etp_score(r) + etp_cost_score(r)
-
 # ── Universo ETP: lista esplicita di ticker quotati su Borsa Italiana ──
 # La diagnostica ha dimostrato che il mercato "italy" dello screener TradingView
 # contiene SOLO azioni (1818 strumenti, tutti type=stock) piu' 7 fondi chiusi:
@@ -580,10 +519,13 @@ def screen_etfs():
 
     if after_etp and not eligible:
         logger.warning("ETP: nessuno supera _passes_etp (liquidita'/trend). "
-                       "Mostro comunque i migliori per punteggio, senza cancello.")
+                       "Mostro comunque i migliori per performance 3M, senza cancello.")
         eligible = after_etp
 
-    eligible.sort(key=etp_total_score, reverse=True)
+    # Ordinamento dichiarato nella pagina: performance a 3 mesi, una colonna
+    # mostrata in tabella — non un punteggio composito invisibile.
+    eligible.sort(key=lambda r: r.get("perf_3m") if r.get("perf_3m") is not None else float("-inf"),
+                  reverse=True)
     logger.info(f"ETP: {len(eligible)} eleggibili → top {min(10, len(eligible))}")
     return eligible[:10]
 
@@ -1146,27 +1088,12 @@ def pct(val):
     color = "#16a34a" if val >= 0 else "#dc2626"
     return f'<span style="color:{color};font-weight:600">{val:+.1f}%</span>'
 
-def rating_badge(r):
-    color = "#16a34a" if r == "Forte" else "#d97706"
-    return f'<span style="color:{color};font-weight:700">● {r}</span>'
-
-def etp_reco_badge(score):
-    """Badge per la Rec. degli ETP, coerente con l'ordinamento (etp_total_score).
-    Soglie da calibrare sui dati reali dell'imbuto."""
-    if score >= 8.0:
-        return '<span style="color:#15803d;font-weight:700;white-space:nowrap">🟢 Forte</span>'
-    elif score >= 5.0:
-        return '<span style="color:#d97706;font-weight:700;white-space:nowrap">🟡 Moderato</span>'
-    elif score >= 2.5:
-        return '<span style="color:#ea580c;font-weight:700;white-space:nowrap">🟠 Cauto</span>'
-    else:
-        return '<span style="color:#dc2626;font-weight:700;white-space:nowrap">🔴 Debole</span>'
-
 def fmt_ter(ter):
     """Formatta il TER (Total Expense Ratio) con colore per fascia di costo."""
     if ter is None:
         return '<span style="color:#999">n.d.</span>'
-    ter_pct = ter * 100 if ter < 0.05 else ter    # stessa euristica di etp_cost_score
+    # TradingView espone il TER come percentuale (0.20) o come frazione (0.002)
+    ter_pct = ter * 100 if ter < 0.05 else ter
     color = "#16a34a" if ter_pct <= 0.30 else ("#d97706" if ter_pct <= 0.75 else "#dc2626")
     return f'<span style="color:{color};font-size:12px">{ter_pct:.2f}%</span>'
 
@@ -1333,15 +1260,6 @@ def macd_badge(macd_str):
     color = "#16a34a" if macd_str.startswith("↑") else "#dc2626"
     return f'<span style="color:{color};font-size:12px;font-weight:600;white-space:nowrap">{macd_str}</span>'
 
-def rec_badge(rec_str):
-    """Badge TV Rec.All (aggregato 26 indicatori)."""
-    colors = {
-        "Compra Forte": "#15803d", "Compra": "#16a34a",
-        "Neutro": "#888", "Vendi": "#dc2626", "Vendi Forte": "#991b1b",
-    }
-    c = colors.get(rec_str, "#888")
-    return f'<span style="color:{c};font-size:12px;font-weight:700">● {rec_str}</span>'
-
 def trend_rimbalzo_badge(label):
     """Badge di classificazione (non un giudizio d'acquisto): distingue un trend
     confermato su 1M e 3M da un semplice rimbalzo tecnico dopo un calo a 3M."""
@@ -1379,7 +1297,7 @@ def stock_rows(lst, analysis_map, market_delta=0):
 
 def etf_rows(lst, analysis_map, market_delta=0):
     if not lst:
-        return '<tr><td colspan="18" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
+        return '<tr><td colspan="17" style="text-align:center;color:#999;padding:20px">Nessun ETF/ETN/ETC ha superato il filtro oggi</td></tr>'
     rows = ""
     for i, d in enumerate(lst, 1):
         a = analysis_map.get(d["symbol"], {})
@@ -1399,7 +1317,6 @@ def etf_rows(lst, analysis_map, market_delta=0):
             <td>{macd_badge(d.get('macd_str','n.d.'))}</td>
             <td>{_composite_badge(*compute_signal(d))}</td>
             <td style="font-size:12px">{detect_pattern(d)}</td>
-            <td>{etp_reco_badge(etp_total_score(d))}</td>
             <td>{fmt_ter(d.get('expense_ratio'))}</td>
             <td>{fmt_aum(d.get('aum'))}</td>
             <td class="wrap"><div style="color:#444">{a.get('motivazione') or auto_comment(d)}</div></td>
@@ -2119,10 +2036,11 @@ def build_html(stocks_it, stocks_us, etfs, portfolio, indices, analysis, passwor
   <!-- TOP 10 ETF / ETN / ETC ITALIA -->
   <div class="section">
     <h2>Top ETF / ETN / ETC (Borsa Italiana) — Momentum <span class="badge-count">{len(etfs)} oggi</span></h2>
+    <p class="empty-note">Ordinati per performance a 3 mesi (colonna 3M), tra quelli con liquidità sufficiente e prezzo sopra la EMA200 (o EMA50). Nessun giudizio: solo i dati della riga.</p>
     {"" if etfs else '<p class="empty-note">Nessun ETF/ETN/ETC ha superato tutti i filtri oggi.</p>'}
     <table>
       <thead><tr>
-        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>Rec.</th><th>TER</th><th>AUM</th><th>Motivazione</th>
+        <th>#</th><th>Ticker</th><th>Tema</th><th>Prezzo</th><th>RSI</th><th>1M</th><th>3M</th><th>5gg</th><th>Candele 5gg</th><th>Candela 1D</th><th>Candela 1W</th><th>MACD</th><th>Segnale</th><th>Pattern</th><th>TER</th><th>AUM</th><th>Motivazione</th>
       </tr></thead>
       <tbody>{etf_rows(etfs, em, mkt_eu)}</tbody>
     </table>

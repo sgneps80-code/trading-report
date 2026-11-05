@@ -226,3 +226,15 @@ def test_pagina_completa():
     assert "6.40 EUR" in pagina and "ev-lista-0" in pagina and "apertura-0" in pagina
     assert "aggiungiEvento" in pagina and "Dettaglio" in pagina
     assert "</script><b>" not in pagina                       # il JSON non chiude lo <script>
+
+
+# ─── Bug 4: niente badge di raccomandazione ──────────────────────────────────
+
+def test_tabella_etf_senza_rec_e_ordinata_per_3m():
+    etf = [{"symbol": s, "price": 10.0, "rsi": 50, "perf_1m": 0.0, "perf_3m": p3, "macd_str": "↓ Ribassista",
+            "macd_hist": -0.1, "trend": "Laterale"} for s, p3 in (("AAA", 2.0), ("BBB", 9.0), ("CCC", None))]
+    righe = G.etf_rows(etf, {})
+    assert "Forte" not in righe and "Moderato" not in righe and "Debole" not in righe
+    pagina = G.build_html([], [], etf, [], {}, {}, "", {}, [], [], [])
+    assert "<th>Rec.</th>" not in pagina and "performance a 3 mesi" in pagina
+    assert not hasattr(G, "etp_reco_badge") and not hasattr(G, "etp_total_score")
